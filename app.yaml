@@ -1,0 +1,26 @@
+command:
+  - node
+  - build/index.mjs
+env:
+  - name: NODE_ENV
+    value: production
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: warehouse
+  # The serving + files plugins ship a static manifest that always declares
+  # a "default" required resource keyed off DATABRICKS_SERVING_ENDPOINT_NAME
+  # / DATABRICKS_VOLUME_FILES. In multi-endpoint / multi-volume mode the
+  # dynamic resource entries are added on top, but the static defaults still
+  # have to resolve at boot. Point them at our primary endpoint + volume so
+  # AppKit's resource registry validation passes.
+  - name: DATABRICKS_SERVING_ENDPOINT_NAME
+    valueFrom: llm
+  - name: DATABRICKS_SERVING_ENDPOINT_LLM
+    valueFrom: llm
+  - name: DATABRICKS_SERVING_ENDPOINT_DETECTOR
+    valueFrom: detector
+  - name: DATABRICKS_VOLUME_FILES
+    valueFrom: volume
+  - name: DATABRICKS_VOLUME_FRAMES
+    valueFrom: volume
+  - name: DATABRICKS_VOLUME_INBOX
+    valueFrom: inbox

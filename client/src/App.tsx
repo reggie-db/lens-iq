@@ -1,0 +1,223 @@
+import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { useState } from "react";
+import {
+  Activity, Bell, Camera, Car, Cpu, Database, LayoutDashboard,
+  Menu, Package, TrendingUp, Upload, Video, Workflow,
+} from "lucide-react";
+import {
+  Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch,
+} from "@databricks/appkit-ui/react";
+import { OverviewPage } from "./pages/Overview";
+import { DevicesPage } from "./pages/Devices";
+import { AlertsPage } from "./pages/Alerts";
+import { DetectionsPage } from "./pages/Detections";
+import { PlatesPage } from "./pages/Plates";
+import { SearchPage } from "./pages/Search";
+import { InventoryPage } from "./pages/Inventory";
+import { TrendsPage } from "./pages/Trends";
+import { LivePage } from "./pages/Live";
+import { UploadPage } from "./pages/Upload";
+import { PipelinePage } from "./pages/Pipeline";
+import { AIChatButton } from "./components/AIChatButton";
+import "./lib/queries";
+
+type Role = "Admin" | "Store Manager";
+
+const RESTRICTED_VIEWS = ["search", "live", "plates", "detections"];
+
+const VIEW_TITLES: Record<string, string> = {
+  overview: "Dashboard Overview",
+  devices: "All Devices",
+  alerts: "Alerts",
+  detections: "Detections",
+  plates: "License Plates",
+  search: "Data Search",
+  inventory: "Inventory",
+  trends: "Trends",
+  live: "Live Stream",
+  upload: "Image Upload",
+  pipeline: "Continuous Pipeline",
+};
+
+interface NavButtonProps {
+  view: string;
+  label: string;
+  icon: typeof LayoutDashboard;
+  activeView: string;
+  onNavigate: (view: string) => void;
+  hidden?: boolean;
+}
+
+function NavButton({ view, label, icon: Icon, activeView, onNavigate, hidden }: NavButtonProps) {
+  if (hidden) return null;
+  return (
+    <Button
+      variant={activeView === view ? "default" : "ghost"}
+      className="w-full justify-start gap-2"
+      onClick={() => onNavigate(view)}
+    >
+      <Icon className="w-4 h-4 shrink-0" />
+      <span className="truncate">{label}</span>
+    </Button>
+  );
+}
+
+interface NavItemsProps {
+  activeView: string;
+  userRole: Role;
+  alertsEnabled: boolean;
+  onAlertsToggle: (enabled: boolean) => void;
+  onItemClick?: () => void;
+}
+
+function NavItems({ activeView, userRole, alertsEnabled, onAlertsToggle, onItemClick }: NavItemsProps) {
+  const navigate = useNavigate();
+  const handle = (view: string) => {
+    if (userRole === "Store Manager" && RESTRICTED_VIEWS.includes(view)) return;
+    navigate(`/${view}`);
+    onItemClick?.();
+  };
+  const restricted = (v: string) => userRole === "Store Manager" && RESTRICTED_VIEWS.includes(v);
+
+  return (
+    <nav className="flex flex-col gap-2">
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Computer Vision</div>
+      <NavButton view="live"       label="Live Detection" icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
+      <NavButton view="upload"     label="Image Upload"  icon={Upload}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="pipeline"   label="Pipeline"      icon={Workflow}        activeView={activeView} onNavigate={handle} />
+      <NavButton view="detections" label="Detections"    icon={Camera}          activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
+
+      <div className="my-2 border-t border-slate-200" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">CV-Driven Insights</div>
+      <NavButton view="overview"   label="Overview"      icon={LayoutDashboard} activeView={activeView} onNavigate={handle} />
+      <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
+      <NavButton view="inventory"  label="Inventory"     icon={Package}         activeView={activeView} onNavigate={handle} />
+      <NavButton view="trends"     label="Trends"        icon={TrendingUp}      activeView={activeView} onNavigate={handle} />
+
+      <div className="my-2 border-t border-slate-200" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Operations</div>
+      <NavButton view="alerts"     label="Alerts"        icon={Bell}            activeView={activeView} onNavigate={handle} />
+      <NavButton view="devices"    label="All Devices"   icon={Cpu}             activeView={activeView} onNavigate={handle} />
+      <NavButton view="search"     label="Data Search"   icon={Database}        activeView={activeView} onNavigate={handle} hidden={restricted("search")} />
+
+      <div className="my-2 border-t border-slate-200" />
+
+      <div className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-slate-100 transition-colors">
+        <div className="flex items-center gap-2">
+          <Camera className="w-4 h-4 text-slate-600" />
+          <span className="text-sm text-slate-700">Live Detection Stream</span>
+        </div>
+        <Switch checked={alertsEnabled} onCheckedChange={onAlertsToggle} />
+      </div>
+    </nav>
+  );
+}
+
+export default function App() {
+  const location = useLocation();
+  const activeView = location.pathname.slice(1) || "live";
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(false);
+  const [userRole, setUserRole] = useState<Role>("Admin");
+
+  return (
+    <div className="min-h-screen bg-slate-50 flex">
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-slate-200">
+        <div className="p-6 border-b border-slate-200">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold">LI</div>
+            <div>
+              <h2 className="text-slate-900 font-semibold">LensIQ</h2>
+              <p className="text-xs text-slate-600">CV for QSR</p>
+            </div>
+          </div>
+        </div>
+        <div className="flex-1 p-4 overflow-y-auto">
+          <NavItems
+            activeView={activeView}
+            userRole={userRole}
+            alertsEnabled={alertsEnabled}
+            onAlertsToggle={setAlertsEnabled}
+          />
+        </div>
+      </aside>
+
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="bg-white border-slate-200 border-b">
+          <div className="px-4 md:px-8 py-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+                  <SheetTrigger asChild>
+                    <Button variant="ghost" size="icon" className="lg:hidden">
+                      <Menu className="w-5 h-5" />
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent side="left" className="w-[280px] sm:w-[320px]">
+                    <SheetHeader>
+                      <SheetTitle>Navigation</SheetTitle>
+                    </SheetHeader>
+                    <div className="mt-6">
+                      <NavItems
+                        activeView={activeView}
+                        userRole={userRole}
+                        alertsEnabled={alertsEnabled}
+                        onAlertsToggle={setAlertsEnabled}
+                        onItemClick={() => setDrawerOpen(false)}
+                      />
+                    </div>
+                  </SheetContent>
+                </Sheet>
+
+                <div className="lg:hidden">
+                  <h1 className="text-slate-900 font-semibold">LensIQ</h1>
+                  <p className="text-sm text-slate-600 hidden sm:block">CV monitoring for quick-serve restaurants</p>
+                </div>
+
+                <div className="hidden lg:block">
+                  <h1 className="text-slate-900 font-semibold">{VIEW_TITLES[activeView] ?? "LensIQ"}</h1>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <Select value={userRole} onValueChange={(v) => setUserRole(v as Role)}>
+                  <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Admin">Admin</SelectItem>
+                    <SelectItem value="Store Manager">Store Manager</SelectItem>
+                  </SelectContent>
+                </Select>
+
+                <Badge variant="outline" className="gap-1">
+                  <Activity className="w-3 h-3" />
+                  <span className="hidden sm:inline">Live</span>
+                </Badge>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex-1 px-4 md:px-8 py-6 overflow-auto">
+          <Routes>
+            <Route path="/" element={<Navigate to="/live" replace />} />
+            <Route path="/overview" element={<OverviewPage />} />
+            <Route path="/devices" element={<DevicesPage />} />
+            <Route path="/alerts" element={<AlertsPage />} />
+            <Route path="/detections" element={<DetectionsPage alertsEnabled={alertsEnabled} />} />
+            <Route path="/plates" element={<PlatesPage />} />
+            <Route path="/search" element={<SearchPage />} />
+            <Route path="/inventory" element={<InventoryPage />} />
+            <Route path="/trends" element={<TrendsPage />} />
+            <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
+            <Route path="/upload" element={<UploadPage />} />
+            <Route path="/pipeline" element={<PipelinePage />} />
+          </Routes>
+        </div>
+
+        <AIChatButton />
+      </div>
+    </div>
+  );
+}

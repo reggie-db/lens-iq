@@ -1,0 +1,36 @@
+# Databricks App resource. Enabled by uncommenting the `include:` block in
+# databricks.yml after the YOLO serving endpoint exists (i.e. after
+# `databricks bundle run pizza_vision_deploy_yolo -t dev` completes).
+resources:
+  apps:
+    pizza_vision_app:
+      name: pizza-vision-app
+      description: Computer vision dashboard for quick serve restaurants.
+      source_code_path: ../
+      user_api_scopes:
+        - serving.serving-endpoints
+        - sql
+        - files.files
+      resources:
+        - name: warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: llm
+          serving_endpoint:
+            name: ${var.llm_endpoint}
+            permission: CAN_QUERY
+        - name: detector
+          serving_endpoint:
+            name: ${var.detector_endpoint}
+            permission: CAN_QUERY
+        - name: volume
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.frames
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: inbox
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.frames_inbox
+            securable_type: VOLUME
+            permission: READ_VOLUME

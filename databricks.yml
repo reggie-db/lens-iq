@@ -1,0 +1,88 @@
+bundle:
+  name: pizza-vision-app
+
+# Scope what gets uploaded for the Databricks App.
+# - exclude lockfiles: they encode resolved registry URLs which on a corporate-
+#   proxied dev machine point at internal mirrors the Apps platform can't reach.
+#   Without a lock, the platform npm install resolves fresh from registry.npmjs.org.
+# - exclude tooling caches (.cursor, .vscode, .databricks state, .tmp).
+# - exclude build/, tsconfig.tsbuildinfo: the platform runs `npm run build`
+#   itself, so shipping our local build/ would just slow upload and get overwritten.
+# node_modules/ and other dev caches are already excluded via .gitignore.
+sync:
+  exclude:
+    - package-lock.json
+    - npm-shrinkwrap.json
+    - yarn.lock
+    - pnpm-lock.yaml
+    - bun.lockb
+    - bun.lock
+    - "**/*.tsbuildinfo"
+    - .cursor/
+    - .vscode/
+    - .databricks/
+
+include:
+  - resources/pipeline.yml
+  - resources/app.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for demo tables and the frame volume.
+    default: reggie_pierce_7405614800873570
+  schema:
+    description: Schema for demo tables and the frame volume.
+    default: pizza_vision
+  warehouse_id:
+    description: SQL Warehouse used by the analytics plugin.
+    default: 6ef03decfb060f8a
+  llm_endpoint:
+    description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
+    default: databricks-claude-opus-4-7
+  detector_endpoint:
+    description: Model serving endpoint used for YOLO object detection.
+    default: pizza-vision-detector
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      profile: DEFAULT
+
+resources:
+  jobs:
+    pizza_vision_seed:
+      name: pizza_vision_seed
+      tasks:
+        - task_key: seed_data
+          notebook_task:
+            notebook_path: ./notebooks/seed_data.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+
+    pizza_vision_deploy_yolo:
+      name: pizza_vision_deploy_yolo
+      tasks:
+        - task_key: deploy_yolo
+          notebook_task:
+            notebook_path: ./notebooks/deploy_yolo.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              registered_name: pizza_vision_detector
+              endpoint_name: ${var.detector_endpoint}
+
+    pizza_vision_simulate:
+      name: pizza_vision_simulate
+      tasks:
+        - task_key: simulate
+          notebook_task:
+            notebook_path: ./notebooks/pipeline_simulator.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              cameras: cam01,cam02,cam03
+              frames_per_camera: "60"
+              cadence_seconds: "2"

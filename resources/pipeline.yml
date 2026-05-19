@@ -1,0 +1,24 @@
+# NOTE: DAB `mode: development` forces `continuous: false` on pipelines
+# regardless of what we set here. After `bundle deploy`, run
+# `databricks pipelines start --full-refresh=false <id>` to kick off a single
+# update, or PUT a body with `continuous: true` against /api/2.0/pipelines/<id>
+# to keep streaming forever.
+resources:
+  pipelines:
+    pizza_vision_pipeline:
+      name: pizza_vision_pipeline
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      serverless: true
+      continuous: true
+      development: true
+      libraries:
+        - file:
+            path: ../pipelines/pizza_vision_pipeline.py
+      configuration:
+        pizza_vision.catalog: ${var.catalog}
+        pizza_vision.schema: ${var.schema}
+        pizza_vision.detector_endpoint: ${var.detector_endpoint}
+        pizza_vision.inbox_path: /Volumes/${var.catalog}/${var.schema}/frames_inbox
+        pizza_vision.dedupe_window_seconds: "10"
+        pizza_vision.watermark: 30 seconds
