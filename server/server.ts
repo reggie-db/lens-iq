@@ -1,26 +1,31 @@
 import { analytics, createApp, files, serving, server, sql } from "@databricks/appkit";
+import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 
-// Pizza Vision AppKit server.
+// LensIQ AppKit server.
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
 //   - analytics(): file-based SQL queries against the SQL warehouse.
-//   - serving({ llm, detector }): proxies to Databricks Model Serving endpoints,
-//     called on behalf of the end user (OBO) by default. The detector alias
-//     points at the YOLO endpoint deployed by notebooks/deploy_yolo.ipynb.
+//   - serving({ llm, detector, roboflow_detector }): proxies to Databricks
+//     Model Serving endpoints, called on behalf of the end user (OBO).
+//       * detector           - single-model YOLO PyFunc (general objects).
+//       * roboflow_detector  - multi-model Roboflow PyFunc that dispatches by
+//                              `model_id` (license plate, spill, wet floor,
+//                              cigarette/vape, slip & fall).
 //   - files({ volumes: { frames } }): Unity Catalog volume for stored frames.
 //     Auto-mounts /api/files/frames/raw?path=<id>.jpg for image bytes.
 //
 // Additional custom routes wired up below:
-//   - POST /api/detect             : Run a single image through the YOLO
-//                                    detector endpoint and normalize the
-//                                    response. With { persist: true } the
+//   - GET  /api/models             : Returns the shared MODELS registry so the
+//                                    UI can render its selector.
+//   - POST /api/detect             : Detection proxy. `model` selects an entry
+//                                    from the MODELS registry; the server
+//                                    invokes the model's serving alias and
+//                                    passes `model_id` for the multi-model
+//                                    endpoint. With { persist: true } the
 //                                    frame is also uploaded to the `frames`
 //                                    volume and a row per detection is
-//                                    inserted into the `detections` table,
-//                                    so the Detections page and warehouse-
-//                                    backed dashboards reflect captures
-//                                    from the demo UI.
+//                                    inserted into the detections table.
 //   - GET  /api/detections/stream  : SSE feed of newly inserted detection rows.
 
 const POLL_INTERVAL_MS = 2000;
@@ -82,8 +87,7 @@ interface NormalizedDetection {
 // AppKit's serving plugin wraps the model response one more time in
 // `{ ok, data }`, so we unwrap that first. We also accept the legacy shapes
 // (bare array or `{predictions: [...]}`) for robustness.
-function _normalize(raw: unknown): NormalizedDetection[] {
-  // Unwrap AppKit's `{ok, data}` envelope when present.
+function _normalizeDatabricks(raw: unknown): NormalizedDetection[] {
   let body: unknown = raw;
   if (raw && typeof raw === "object" && "data" in raw && "ok" in raw) {
     body = (raw as { data: unknown }).data;
@@ -95,9 +99,6 @@ function _normalize(raw: unknown): NormalizedDetection[] {
   } else if (body && typeof body === "object" && "predictions" in body) {
     const preds = (body as { predictions: unknown }).predictions;
     if (Array.isArray(preds)) {
-      // Model Serving wraps the PyFunc output in `predictions: [...]`. If the
-      // first element is itself an array, the PyFunc returned per-row lists
-      // (our case). Otherwise the first element is already a detection dict.
       candidates = Array.isArray(preds[0]) ? (preds[0] as unknown[]) : preds;
     }
   }
@@ -120,12 +121,18 @@ function _normalize(raw: unknown): NormalizedDetection[] {
   return out;
 }
 
-// Decode a base64 image (with or without a data URL prefix) into a Buffer.
-function _decodeImage(image: string): Buffer | null {
+// Strip the `data:image/...;base64,` prefix that the browser canvas produces,
+// returning just the base64 payload Model Serving expects.
+function _stripDataUrl(image: string): string {
   const match = image.match(/^data:[^;]+;base64,(.+)$/);
-  const base64 = match ? match[1] : image;
+  return match ? match[1] : image;
+}
+
+// Decode a base64 image (with or without a data URL prefix) into a Buffer for
+// upload to the UC volume.
+function _decodeImage(image: string): Buffer | null {
   try {
-    return Buffer.from(base64, "base64");
+    return Buffer.from(_stripDataUrl(image), "base64");
   } catch {
     return null;
   }
@@ -143,6 +150,11 @@ const AppKit = await createApp({
       endpoints: {
         llm: { env: "DATABRICKS_SERVING_ENDPOINT_LLM" },
         detector: { env: "DATABRICKS_SERVING_ENDPOINT_DETECTOR" },
+        // Multi-model Roboflow PyFunc deployed by
+        // notebooks/deploy_roboflow_models.ipynb. The PyFunc dispatches on
+        // a `model_id` row column so all five Roboflow models share one
+        // endpoint, one cold-start, and one MLflow registered model.
+        roboflow_detector: { env: "DATABRICKS_SERVING_ENDPOINT_ROBOFLOW_DETECTOR" },
       },
     }),
     files({
@@ -158,29 +170,47 @@ const AppKit = await createApp({
   ],
   onPluginsReady(appkit) {
     appkit.server.extend((app) => {
+      app.get("/api/models", (_req, res) => {
+        res.json({
+          models: MODELS.map((m) => ({
+            id: m.id,
+            name: m.name,
+            description: m.description,
+            provider: m.provider,
+            color: m.color,
+          })),
+          default: DEFAULT_MODEL_ID,
+        });
+      });
+
       app.post("/api/detect", async (req, res) => {
-        const { image, conf = 0.35, iou = 0.5, persist = false } = req.body ?? {};
+        const { image, conf = 0.35, iou = 0.5, persist = false, model: modelId = DEFAULT_MODEL_ID } = req.body ?? {};
         if (!image || typeof image !== "string") {
           res.status(400).json({ error: "Missing required `image` (base64 data URL or raw base64)." });
           return;
         }
-        if (!process.env.DATABRICKS_SERVING_ENDPOINT_DETECTOR) {
-          res.status(503).json({
-            error: "Detector serving endpoint is not configured. Run `databricks bundle run pizza_vision_deploy_yolo -t dev` to create it.",
-          });
+
+        const model = getModel(typeof modelId === "string" ? modelId : DEFAULT_MODEL_ID);
+        if (!model) {
+          res.status(400).json({ error: `Unknown model id: ${modelId}` });
           return;
         }
 
-        let detections: NormalizedDetection[] = [];
+        // Build the dataframe_records payload for the served PyFunc. The
+        // YOLO endpoint ignores extras; the multi-model Roboflow endpoint
+        // dispatches on `model_id`.
+        const row: Record<string, unknown> = { image, conf, iou };
+        if (model.roboflowModelId) row.model_id = model.roboflowModelId;
 
+        let detections: NormalizedDetection[] = [];
         try {
-          const raw = await appkit.serving("detector").asUser(req).invoke({
-            dataframe_records: [{ image, conf, iou }],
+          const raw = await appkit.serving(model.servingAlias).asUser(req).invoke({
+            dataframe_records: [row],
           });
-          detections = _normalize(raw);
+          detections = _normalizeDatabricks(raw);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({ error: `Detector serving failed: ${message}` });
+          res.status(502).json({ error: `Detector failed (${model.id}): ${message}` });
           return;
         }
 

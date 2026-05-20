@@ -27,17 +27,22 @@ export interface CallDetectorOptions {
    * page picks them up via /api/detections/stream within ~2s.
    */
   persist?: boolean;
+  /**
+   * Model id from the MODELS registry. Defaults server-side to `yolo`.
+   * See `lib/models.ts` for the full list.
+   */
+  model?: string;
 }
 
 export async function callDetector(
   image: string,
   options: CallDetectorOptions = {},
 ): Promise<DetectorResult> {
-  const { conf = 0.35, iou = 0.5, persist = false } = options;
+  const { conf = 0.35, iou = 0.5, persist = false, model } = options;
   const res = await fetch("/api/detect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image, conf, iou, persist }),
+    body: JSON.stringify({ image, conf, iou, persist, model }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

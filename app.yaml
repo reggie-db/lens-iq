@@ -18,9 +18,15 @@ env:
     valueFrom: llm
   - name: DATABRICKS_SERVING_ENDPOINT_DETECTOR
     valueFrom: detector
+  - name: DATABRICKS_SERVING_ENDPOINT_ROBOFLOW_DETECTOR
+    valueFrom: roboflow_detector
+  # Volume paths are supplied as plain values rather than `valueFrom: <binding>`
+  # because granting the app SP USE CATALOG on shared catalogs requires MANAGE
+  # which the deploy user may not have. The files plugin acts OBO, so per-user
+  # permissions on the volumes are still enforced at runtime.
   - name: DATABRICKS_VOLUME_FILES
-    valueFrom: volume
+    value: /Volumes/iot_dev/lensiq/frames
   - name: DATABRICKS_VOLUME_FRAMES
-    valueFrom: volume
+    value: /Volumes/iot_dev/lensiq/frames
   - name: DATABRICKS_VOLUME_INBOX
-    valueFrom: inbox
+    value: /Volumes/iot_dev/lensiq/frames_inbox

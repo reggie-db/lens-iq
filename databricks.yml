@@ -42,13 +42,37 @@ variables:
   detector_endpoint:
     description: Model serving endpoint used for YOLO object detection.
     default: pizza-vision-detector
+  roboflow_detector_endpoint:
+    description: Model serving endpoint that hosts the multi-model Roboflow detector PyFunc.
+    default: lensiq-roboflow-detector
+  roboflow_secret_scope:
+    description: Databricks secret scope holding ROBOFLOW_API_KEY. Read by the
+      lensiq_deploy_roboflow notebook to download Roboflow model weights at
+      deploy time; the weights are then baked into the MLflow artifact, so the
+      app itself never needs the secret.
+    default: reggie_pierce
+  roboflow_secret_key:
+    description: Key inside roboflow_secret_scope that holds the Roboflow API key.
+    default: ROBOFLOW_API_KEY
 
 targets:
   dev:
     mode: development
-    default: true
     workspace:
       profile: DEFAULT
+  racetrac:
+    mode: development
+    default: true
+    workspace:
+      profile: RACETRAC-DEV
+    variables:
+      catalog: iot_dev
+      schema: lensiq
+      warehouse_id: b087b375a8f43baa
+      llm_endpoint: databricks-claude-opus-4-7
+      # Reuse the existing YOLO endpoint already in this workspace
+      # (iot_dev.iot_ingest.yolo_object_detect served as iot-ingest-object-detection).
+      detector_endpoint: iot-ingest-object-detection
 
 resources:
   jobs:
@@ -73,6 +97,20 @@ resources:
               schema: ${var.schema}
               registered_name: pizza_vision_detector
               endpoint_name: ${var.detector_endpoint}
+
+    lensiq_deploy_roboflow:
+      name: lensiq_deploy_roboflow
+      tasks:
+        - task_key: deploy_roboflow
+          notebook_task:
+            notebook_path: ./notebooks/deploy_roboflow_models.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              registered_name: lensiq_roboflow_detector
+              endpoint_name: ${var.roboflow_detector_endpoint}
+              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_secret: ${var.roboflow_secret_key}
 
     pizza_vision_simulate:
       name: pizza_vision_simulate

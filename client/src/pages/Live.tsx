@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
-import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@databricks/appkit-ui/react";
+import {
+  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label,
+  Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
+} from "@databricks/appkit-ui/react";
 import { Camera, Save } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { captureVideoFrame, requestCameraStream, stopMediaStream } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
+import { MODELS, DEFAULT_MODEL_ID, getModel } from "../lib/models";
 
 // Live webcam preview that periodically grabs a frame, posts it to the
 // configured detector serving endpoint via /api/detect, and overlays the
@@ -43,6 +47,8 @@ export function LivePage({ isActive }: LivePageProps) {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [now, setNow] = useState<number>(() => Date.now());
   const [saving, setSaving] = useState<boolean>(false);
+  const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
+  const activeModel = useMemo(() => getModel(modelId) ?? MODELS[0], [modelId]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -83,7 +89,7 @@ export function LivePage({ isActive }: LivePageProps) {
       if (!frame) return;
       inFlightRef.current = true;
       try {
-        const result = await callDetector(frame);
+        const result = await callDetector(frame, { model: modelId });
         setDetections(result.detections);
         const ts = Date.now();
         const newEntries: HistoryEntry[] = result.detections.map((d) => ({ ts, label: d.label }));
@@ -109,7 +115,14 @@ export function LivePage({ isActive }: LivePageProps) {
 
     const id = setInterval(tick, intervalMs);
     return () => clearInterval(id);
-  }, [fps, isActive]);
+  }, [fps, isActive, modelId]);
+
+  // When the user switches model, wipe stale state so the new model starts
+  // with a clean rolling-window panel and no leftover bounding boxes.
+  useEffect(() => {
+    setDetections([]);
+    setHistory([]);
+  }, [modelId]);
 
   // Prune the history window and bump `now` once per second so per-bucket
   // counts/labels stay fresh even when the detector returns no detections.
@@ -135,22 +148,24 @@ export function LivePage({ isActive }: LivePageProps) {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (detections.length === 0) return;
+    const color = activeModel.color;
+    const fillColor = _hexToRgba(color, 0.9);
     ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
     ctx.font = `${Math.max(14, Math.round(canvas.width / 60))}px sans-serif`;
     for (const d of detections) {
       const [x1, y1, x2, y2] = d.bbox;
-      ctx.strokeStyle = "#dc2626";
+      ctx.strokeStyle = color;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
       const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
       const padding = 4;
       const labelHeight = Math.max(18, Math.round(canvas.width / 50));
       const tw = ctx.measureText(label).width + padding * 2;
-      ctx.fillStyle = "rgba(220, 38, 38, 0.9)";
+      ctx.fillStyle = fillColor;
       ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
       ctx.fillStyle = "white";
       ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
     }
-  }, [detections]);
+  }, [detections, activeModel]);
 
   const handleSaveSnapshot = async () => {
     if (!videoRef.current || saving) return;
@@ -161,7 +176,7 @@ export function LivePage({ isActive }: LivePageProps) {
     }
     setSaving(true);
     try {
-      const result = await callDetector(frame, { persist: true });
+      const result = await callDetector(frame, { persist: true, model: modelId });
       if (result.saved) {
         toast.success(`Saved ${result.saved.frame_id} with ${result.detections.length} detection(s)`);
       } else {
@@ -212,6 +227,11 @@ export function LivePage({ isActive }: LivePageProps) {
   }, [detections]);
 
   const windowSeconds = Math.round(HISTORY_WINDOW_MS / 1000);
+  // Group by serving alias so the selector reflects the underlying serving
+  // endpoint: one entry for the YOLO endpoint, one bucket for every model
+  // multiplexed through the Roboflow PyFunc dispatcher.
+  const yoloModels = MODELS.filter((m) => m.servingAlias === "detector");
+  const roboflowModels = MODELS.filter((m) => m.servingAlias === "roboflow_detector");
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -221,16 +241,54 @@ export function LivePage({ isActive }: LivePageProps) {
             <Camera className="w-5 h-5" /> Live Detection
           </CardTitle>
           <CardDescription>
-            Frames are sent to the YOLO detector endpoint and bounding boxes are
-            overlaid here in realtime.
+            Pick a detector below - frames are sent to the chosen model and
+            bounding boxes are overlaid here in realtime.
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
+            <div className="space-y-2">
+              <Label htmlFor="model">Detector</Label>
+              <Select value={modelId} onValueChange={setModelId}>
+                <SelectTrigger id="model" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {yoloModels.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>YOLO endpoint</SelectLabel>
+                      {yoloModels.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                  {roboflowModels.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Roboflow multi-model endpoint</SelectLabel>
+                      {roboflowModels.map((m) => (
+                        <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <Badge
+              variant="outline"
+              className="gap-1.5 self-end"
+              style={{ borderColor: activeModel.color, color: activeModel.color }}
+            >
+              <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: activeModel.color }} />
+              {activeModel.servingAlias === "detector" ? "Databricks (YOLO)" : "Databricks (Roboflow)"}
+            </Badge>
+          </div>
+          <p className="text-xs text-slate-500">{activeModel.description}</p>
+
           <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
             <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
             <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
           </div>
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
             <div className="space-y-2">
               <Label htmlFor="fps">Frame rate (FPS)</Label>
               <Input
@@ -268,7 +326,9 @@ export function LivePage({ isActive }: LivePageProps) {
       <Card>
         <CardHeader>
           <CardTitle>Detections - last {windowSeconds}s</CardTitle>
-          <CardDescription>Rolling window across the live feed</CardDescription>
+          <CardDescription>
+            Rolling window for <span className="font-medium" style={{ color: activeModel.color }}>{activeModel.name}</span>
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex items-baseline gap-2">
@@ -283,11 +343,11 @@ export function LivePage({ isActive }: LivePageProps) {
                 <XAxis dataKey="label" stroke="#94a3b8" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
                 <YAxis stroke="#94a3b8" tick={{ fontSize: 10 }} width={24} allowDecimals={false} />
                 <Tooltip
-                  cursor={{ fill: "rgba(220, 38, 38, 0.08)" }}
+                  cursor={{ fill: _hexToRgba(activeModel.color, 0.08) }}
                   contentStyle={{ fontSize: 12, padding: "4px 8px" }}
                   labelFormatter={(v) => `t=${v}`}
                 />
-                <Bar dataKey="count" fill="#dc2626" radius={[2, 2, 0, 0]} />
+                <Bar dataKey="count" fill={activeModel.color} radius={[2, 2, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -308,8 +368,8 @@ export function LivePage({ isActive }: LivePageProps) {
                     </div>
                     <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                       <div
-                        className="h-full bg-red-600 rounded-full transition-all"
-                        style={{ width: `${pct}%` }}
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${pct}%`, backgroundColor: activeModel.color }}
                       />
                     </div>
                   </div>
@@ -335,4 +395,17 @@ export function LivePage({ isActive }: LivePageProps) {
       </Card>
     </div>
   );
+}
+
+// Convert a `#rrggbb` color string into an `rgba(...)` string at the given
+// alpha. Used to derive translucent fills (bbox label backgrounds, chart
+// cursor) from a model's solid accent color.
+function _hexToRgba(hex: string, alpha: number): string {
+  const m = hex.match(/^#?([0-9a-fA-F]{6})$/);
+  if (!m) return `rgba(220, 38, 38, ${alpha})`;
+  const n = parseInt(m[1], 16);
+  const r = (n >> 16) & 0xff;
+  const g = (n >> 8) & 0xff;
+  const b = n & 0xff;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

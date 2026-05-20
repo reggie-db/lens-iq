@@ -1,8 +1,59 @@
+# Dependencies
 node_modules/
+
+# Build outputs
 build/
+dist/
 client/dist/
+*.tsbuildinfo
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lockb
+uv.lock
+poetry.lock
+Pipfile.lock
+
+# Environment & secrets
 .env
-.env.local
-.DS_Store
+.env.*
+!.env.example
+
+# Databricks
+.databricks/
+
+# Logs
 *.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
 .tmp/
+tmp/
+.cache/
