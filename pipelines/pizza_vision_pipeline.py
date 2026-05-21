@@ -33,7 +33,7 @@ _INBOX_PATH = spark.conf.get(
 )
 _DETECTOR_ENDPOINT = spark.conf.get(
     "pizza_vision.detector_endpoint",
-    "pizza-vision-detector",
+    "lensiq-detector",
 )
 _DEDUPE_WINDOW_SECONDS = int(spark.conf.get("pizza_vision.dedupe_window_seconds", "10"))
 _WATERMARK = spark.conf.get("pizza_vision.watermark", "30 seconds")

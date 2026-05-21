@@ -75,7 +75,7 @@ Frame images are served by the built-in Files plugin route, no custom wrapper.
 │   └── queries/            One .sql file per analytics query key
 ├── notebooks/
 │   └── seed_data.ipynb     Synthetic data generator
-├── databricks.yml          DAB with `pizza_vision_app` app + seed job
+├── databricks.yml          DAB with `lens_iq` app + seed job
 ├── app.yaml                Databricks Apps manifest
 ├── package.json
 └── tsconfig.json
@@ -116,7 +116,7 @@ You'll need the following env vars locally (these come from the
 ```
 DATABRICKS_WAREHOUSE_ID=...
 DATABRICKS_SERVING_ENDPOINT_LLM=databricks-claude-opus-4-7
-DATABRICKS_SERVING_ENDPOINT_DETECTOR=pizza-vision-detector
+DATABRICKS_SERVING_ENDPOINT_DETECTOR=lensiq-detector
 DATABRICKS_VOLUME_FRAMES=/Volumes/users/pizza_vision/frames
 DATABRICKS_HOST=...
 DATABRICKS_TOKEN=...   # OR DATABRICKS_CONFIG_PROFILE=DEFAULT
@@ -130,7 +130,7 @@ base64-encoded image and returns predictions. To produce one:
 1. Log the YOLO weights from the original `pizza-detector/` project as an MLflow
    PyFunc model that wraps `ultralytics.YOLO(...)` and returns
    `[{label, confidence, bbox}, ...]`.
-2. Register and deploy to Model Serving as `pizza-vision-detector`.
+2. Register and deploy to Model Serving as `lensiq-detector`.
 3. Update `databricks.yml::variables.detector_endpoint` if the name differs.
 
 Until that exists the Live and Upload pages will surface a 502 with the
@@ -143,5 +143,5 @@ serving error - everything else works against the synthetic warehouse data.
 ```bash
 databricks bundle validate -t dev
 databricks bundle deploy   -t dev
-databricks apps deploy pizza-vision-app -t dev
+databricks apps deploy lens-iq -t dev
 ```

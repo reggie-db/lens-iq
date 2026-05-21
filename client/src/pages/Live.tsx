@@ -1,14 +1,39 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import toast from "react-hot-toast";
 import {
   Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label,
   Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue,
+  Spinner,
 } from "@databricks/appkit-ui/react";
-import { Camera, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { captureVideoFrame, requestCameraStream, stopMediaStream } from "../lib/camera";
+import {
+  SNAPSHOT_MAX_DIMENSION,
+  captureVideoFrameForDetection,
+  requestCameraStream,
+  scaleDetectionBbox,
+  stopMediaStream,
+} from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "../lib/models";
+import { fetchServingStatus } from "../lib/serving-status";
+import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo } from "../lib/samples";
+
+// Sources the user can feed into the detector. "webcam" is the default; the
+// other entries map onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
+const WEBCAM_SOURCE_ID = "webcam";
+
+// Poll serving-status at the same cadence as the server-side AppKit cache TTL.
+const SERVING_STATUS_POLL_MS = 45_000;
+
+// A detect request that's been in flight this long without responding almost
+// certainly means the endpoint scaled to zero and we're paying for a cold
+// start. At that point we (1) flip the on-video overlay from a small spinner
+// pill to the full "Waking endpoint" treatment, and (2) force-refresh the
+// cached serving-status so the message reflects the true endpoint state
+// instead of relying on the 45s background poll.
+const PENDING_OVERLAY_THRESHOLD_MS = 2000;
+const PENDING_FORCE_REFRESH_MS = 3000;
 
 // Live webcam preview that periodically grabs a frame, posts it to the
 // configured detector serving endpoint via /api/detect, and overlays the
@@ -48,35 +73,126 @@ export function LivePage({ isActive }: LivePageProps) {
   const [now, setNow] = useState<number>(() => Date.now());
   const [saving, setSaving] = useState<boolean>(false);
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
+  const [sourceId, setSourceId] = useState<string>(WEBCAM_SOURCE_ID);
+  // Tracks when the current /api/detect tick started. Used for the on-video
+  // spinner overlay; we render `now - pendingSince` so the user gets a live
+  // elapsed counter during cold starts.
+  const [pendingSince, setPendingSince] = useState<number | null>(null);
+  const [endpointReady, setEndpointReady] = useState(true);
+  const [endpointState, setEndpointState] = useState("");
+  const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
   const activeModel = useMemo(() => getModel(modelId) ?? MODELS[0], [modelId]);
+  const activeSample = useMemo(
+    () => (sourceId === WEBCAM_SOURCE_ID ? null : getSampleVideo(sourceId) ?? null),
+    [sourceId],
+  );
 
+  // Manage the <video> element's source. For webcam we attach a MediaStream
+  // (live device feed). For sample videos we set `src` to a proxied URL that
+  // streams the upstream Roboflow MP4 with CORS headers, so canvas captures
+  // don't taint and the detection loop keeps working.
   useEffect(() => {
     if (!isActive) return;
+    const video = videoRef.current;
+    if (!video) return;
 
-    const startCamera = async () => {
+    let cancelled = false;
+
+    const attachWebcam = async () => {
       const stream = await requestCameraStream("environment");
+      if (cancelled) {
+        stopMediaStream(stream);
+        return;
+      }
       if (!stream) {
         setStatus("Camera access denied");
         setStatusKind("error");
         return;
       }
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        trackRef.current = stream.getVideoTracks()[0] ?? null;
-        const settings = trackRef.current?.getSettings();
-        setStatus(`Camera ready (${settings?.width ?? "?"}x${settings?.height ?? "?"})`);
-        setStatusKind("info");
-        await videoRef.current.play().catch(() => undefined);
-      }
+      video.srcObject = stream;
+      video.src = "";
+      video.loop = false;
+      video.muted = true;
+      trackRef.current = stream.getVideoTracks()[0] ?? null;
+      const settings = trackRef.current?.getSettings();
+      setStatus(`Camera ready (${settings?.width ?? "?"}x${settings?.height ?? "?"})`);
+      setStatusKind("info");
+      await video.play().catch(() => undefined);
     };
-    void startCamera();
+
+    const attachSample = async (sampleId: string) => {
+      video.srcObject = null;
+      trackRef.current = null;
+      video.crossOrigin = "anonymous";
+      video.loop = true;
+      video.muted = true;
+      video.src = `/api/sample-videos/${sampleId}`;
+      setStatus("Loading sample...");
+      setStatusKind("info");
+      await video.play().catch(() => undefined);
+    };
+
+    if (sourceId === WEBCAM_SOURCE_ID) {
+      void attachWebcam();
+    } else {
+      void attachSample(sourceId);
+    }
+
+    const syncVideoSize = () => {
+      setVideoSize({
+        w: video.videoWidth || 0,
+        h: video.videoHeight || 0,
+      });
+    };
+    video.addEventListener("loadedmetadata", syncVideoSize);
+    video.addEventListener("resize", syncVideoSize);
 
     return () => {
-      stopMediaStream((videoRef.current?.srcObject as MediaStream | null) ?? null);
-      if (videoRef.current) videoRef.current.srcObject = null;
+      cancelled = true;
+      video.removeEventListener("loadedmetadata", syncVideoSize);
+      video.removeEventListener("resize", syncVideoSize);
+      stopMediaStream((video.srcObject as MediaStream | null) ?? null);
+      video.srcObject = null;
+      video.removeAttribute("src");
+      video.load();
       trackRef.current = null;
     };
-  }, [isActive]);
+  }, [isActive, sourceId]);
+
+  // Cached GET /api/serving-status/:alias - the AppKit CacheManager fronts
+  // the Workspace API so we can poll cheaply. The overlay reads this state
+  // directly instead of guessing from /api/detect latency.
+  const refreshServingStatus = useCallback(
+    async (force = false) => {
+      try {
+        const status = await fetchServingStatus(activeModel.servingAlias, { force });
+        setEndpointReady(status.ready);
+        setEndpointState(status.state);
+      } catch {
+        setEndpointReady(true);
+      }
+    },
+    [activeModel.servingAlias],
+  );
+
+  useEffect(() => {
+    if (!isActive) return;
+    void refreshServingStatus();
+    const id = setInterval(() => void refreshServingStatus(), SERVING_STATUS_POLL_MS);
+    return () => clearInterval(id);
+  }, [isActive, refreshServingStatus]);
+
+  // If a detect request has been in flight long enough to look like a cold
+  // start, force-refresh the cached serving-status so the overlay can switch
+  // from "Detecting" to "Waking endpoint" based on actual state instead of
+  // continuing to trust the last 45s-old poll.
+  useEffect(() => {
+    if (pendingSince == null) return;
+    const elapsed = now - pendingSince;
+    if (elapsed < PENDING_FORCE_REFRESH_MS) return;
+    if (!endpointReady) return;
+    void refreshServingStatus(true);
+  }, [pendingSince, now, endpointReady, refreshServingStatus]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -85,14 +201,19 @@ export function LivePage({ isActive }: LivePageProps) {
 
     const tick = async () => {
       if (inFlightRef.current || !videoRef.current) return;
-      const frame = captureVideoFrame(videoRef.current, 0.7);
+      const frame = captureVideoFrameForDetection(videoRef.current);
       if (!frame) return;
       inFlightRef.current = true;
+      setPendingSince(Date.now());
       try {
-        const result = await callDetector(frame, { model: modelId });
-        setDetections(result.detections);
+        const result = await callDetector(frame.image, { model: modelId });
+        const scaled = result.detections.map((d) => ({
+          ...d,
+          bbox: scaleDetectionBbox(d.bbox, frame.scaleX, frame.scaleY),
+        }));
+        setDetections(scaled);
         const ts = Date.now();
-        const newEntries: HistoryEntry[] = result.detections.map((d) => ({ ts, label: d.label }));
+        const newEntries: HistoryEntry[] = scaled.map((d) => ({ ts, label: d.label }));
         if (newEntries.length > 0) {
           setHistory((prev) => {
             const cutoff = ts - HISTORY_WINDOW_MS;
@@ -102,7 +223,11 @@ export function LivePage({ isActive }: LivePageProps) {
             return [...trimmed, ...newEntries];
           });
         }
-        setStatus(`Detected ${result.detections.length} object(s)`);
+        setStatus(
+          scaled.length > 0
+            ? `Detected ${scaled.length} object(s)`
+            : "No objects detected in this frame",
+        );
         setStatusKind("info");
       } catch (err) {
         setDetections([]);
@@ -110,6 +235,7 @@ export function LivePage({ isActive }: LivePageProps) {
         setStatusKind("error");
       } finally {
         inFlightRef.current = false;
+        setPendingSince(null);
       }
     };
 
@@ -140,8 +266,8 @@ export function LivePage({ isActive }: LivePageProps) {
     const canvas = canvasRef.current;
     const video = videoRef.current;
     if (!canvas || !video) return;
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
+    const w = videoSize.w || video.videoWidth || 1280;
+    const h = videoSize.h || video.videoHeight || 720;
     if (canvas.width !== w) canvas.width = w;
     if (canvas.height !== h) canvas.height = h;
     const ctx = canvas.getContext("2d");
@@ -165,18 +291,21 @@ export function LivePage({ isActive }: LivePageProps) {
       ctx.fillStyle = "white";
       ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
     }
-  }, [detections, activeModel]);
+  }, [detections, activeModel, videoSize]);
 
   const handleSaveSnapshot = async () => {
     if (!videoRef.current || saving) return;
-    const frame = captureVideoFrame(videoRef.current, 0.85);
+    const frame = captureVideoFrameForDetection(videoRef.current, {
+      maxDimension: SNAPSHOT_MAX_DIMENSION,
+      quality: 0.78,
+    });
     if (!frame) {
       toast.error("No frame to capture yet.");
       return;
     }
     setSaving(true);
     try {
-      const result = await callDetector(frame, { persist: true, model: modelId });
+      const result = await callDetector(frame.image, { persist: true, model: modelId });
       if (result.saved) {
         toast.success(`Saved ${result.saved.frame_id} with ${result.detections.length} detection(s)`);
       } else {
@@ -236,23 +365,59 @@ export function LivePage({ isActive }: LivePageProps) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <Card className="lg:col-span-2">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Camera className="w-5 h-5" /> Live Detection
-          </CardTitle>
-          <CardDescription>
-            Pick a detector below - frames are sent to the chosen model and
-            bounding boxes are overlaid here in realtime.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_auto] gap-3 items-end">
-            <div className="space-y-2">
+        <CardContent className="space-y-4 pt-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="source">Source</Label>
+              <Select
+                value={sourceId}
+                onValueChange={(v) => {
+                  setSourceId(v);
+                  // If the user picked a sample, auto-switch to a detector the
+                  // sample is curated for so the demo "just works".
+                  if (v !== WEBCAM_SOURCE_ID) {
+                    const sample = getSampleVideo(v);
+                    if (sample && sample.models.length > 0 && !sample.models.includes(modelId)) {
+                      setModelId(sample.models[0]);
+                    }
+                  }
+                }}
+              >
+                <SelectTrigger id="source" className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    <SelectLabel>Live</SelectLabel>
+                    <SelectItem value={WEBCAM_SOURCE_ID}>Webcam</SelectItem>
+                  </SelectGroup>
+                  <SelectGroup>
+                    <SelectLabel>Sample clips</SelectLabel>
+                    {SAMPLE_VIDEOS.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="model">Detector</Label>
-              <Select value={modelId} onValueChange={setModelId}>
-                <SelectTrigger id="model" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
+              <Select
+                value={modelId}
+                onValueChange={(v) => {
+                  setModelId(v);
+                  // Symmetric helper: when the user picks a detector while on
+                  // the webcam, leave them alone. If they're already on a
+                  // sample that doesn't suit the new detector, jump to a
+                  // sample that does (if one exists).
+                  if (sourceId !== WEBCAM_SOURCE_ID) {
+                    const model = getModel(v);
+                    if (model && !activeSample?.models.includes(v)) {
+                      const suggested = defaultSampleForModel(model);
+                      if (suggested) setSourceId(suggested.id);
+                    }
+                  }
+                }}
+              >
+                <SelectTrigger id="model" className="w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {yoloModels.length > 0 && (
                     <SelectGroup>
@@ -273,20 +438,41 @@ export function LivePage({ isActive }: LivePageProps) {
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              loop={sourceId !== WEBCAM_SOURCE_ID}
+              className="absolute inset-0 w-full h-full object-contain"
+            />
+            {/* `object-contain` makes the canvas letterbox itself to its
+                intrinsic width/height (set to the video's native resolution)
+                inside the 16:9 container - exactly like the video element
+                above. Without this, the canvas pixel buffer is stretched to
+                fill the container and bounding boxes drift into the black
+                letterbox bars when the source aspect ratio != 16:9. */}
+            <canvas
+              ref={canvasRef}
+              className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+            />
             <Badge
               variant="outline"
-              className="gap-1.5 self-end"
+              className="absolute top-2 left-2 gap-1.5 backdrop-blur bg-white/85"
               style={{ borderColor: activeModel.color, color: activeModel.color }}
             >
               <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: activeModel.color }} />
-              {activeModel.servingAlias === "detector" ? "Databricks (YOLO)" : "Databricks (Roboflow)"}
+              {activeModel.name}
             </Badge>
-          </div>
-          <p className="text-xs text-slate-500">{activeModel.description}</p>
-
-          <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
-            <video ref={videoRef} autoPlay playsInline muted className="absolute inset-0 w-full h-full object-contain" />
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+            <DetectorPendingOverlay
+              pendingSince={pendingSince}
+              endpointReady={endpointReady}
+              endpointState={endpointState}
+              now={now}
+            />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
             <div className="space-y-2">
@@ -393,6 +579,60 @@ export function LivePage({ isActive }: LivePageProps) {
           )}
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+// Two-state spinner overlay on the video.
+//
+// - pending < PENDING_OVERLAY_THRESHOLD_MS: nothing rendered (steady-state
+//   polling stays quiet so the UI doesn't flash every tick).
+// - pending >= threshold and endpoint READY: small "Detecting" pill in the
+//   corner. The request is just slower than usual but the endpoint is up.
+// - pending >= threshold and endpoint NOT READY: full-card "Waking endpoint"
+//   overlay with elapsed counter, because cold starts can take 30-60s and the
+//   user needs to know the page isn't stuck.
+//
+// The endpointReady flag is driven by the AppKit-cached /api/serving-status,
+// which is force-refreshed after PENDING_FORCE_REFRESH_MS so we don't keep
+// rendering "Detecting" when the endpoint silently scaled to zero.
+function DetectorPendingOverlay({
+  pendingSince,
+  endpointReady,
+  endpointState,
+  now,
+}: {
+  pendingSince: number | null;
+  endpointReady: boolean;
+  endpointState: string;
+  now: number;
+}) {
+  if (pendingSince == null) return null;
+  const elapsed = Math.max(0, now - pendingSince);
+  if (elapsed < PENDING_OVERLAY_THRESHOLD_MS) return null;
+  const seconds = Math.floor(elapsed / 1000);
+
+  if (endpointReady) {
+    return (
+      <div className="absolute top-2 right-2">
+        <div className="flex items-center gap-2 px-2.5 py-1 rounded-md bg-black/55 text-white text-xs backdrop-blur">
+          <Spinner className="size-3.5" />
+          <span>Detecting{seconds > 4 ? ` (${seconds}s)` : ""}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const stateHint = endpointState && endpointState !== "READY" ? ` (${endpointState})` : "";
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-[2px]">
+      <div className="flex flex-col items-center gap-3 px-5 py-4 rounded-lg bg-black/70 text-white">
+        <Spinner className="size-6" />
+        <div className="text-sm font-medium">Waking detection endpoint</div>
+        <div className="text-xs text-slate-300">
+          Model Serving cold start{stateHint}. Elapsed: {seconds}s
+        </div>
+      </div>
     </div>
   );
 }

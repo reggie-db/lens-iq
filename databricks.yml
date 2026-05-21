@@ -1,5 +1,5 @@
 bundle:
-  name: pizza-vision-app
+  name: lens-iq
 
 # Scope what gets uploaded for the Databricks App.
 # - exclude lockfiles: they encode resolved registry URLs which on a corporate-
@@ -41,7 +41,7 @@ variables:
     default: databricks-claude-opus-4-7
   detector_endpoint:
     description: Model serving endpoint used for YOLO object detection.
-    default: pizza-vision-detector
+    default: lensiq-detector
   roboflow_detector_endpoint:
     description: Model serving endpoint that hosts the multi-model Roboflow detector PyFunc.
     default: lensiq-roboflow-detector
@@ -95,7 +95,7 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-              registered_name: pizza_vision_detector
+              registered_name: lensiq_detector
               endpoint_name: ${var.detector_endpoint}
 
     lensiq_deploy_roboflow:

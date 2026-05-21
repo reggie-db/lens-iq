@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev.sh - one-shot local dev loop for the pizza-vision-app.
+# dev.sh - one-shot local dev loop for the lens-iq app.
 #
 # Validates prerequisites (node, databricks CLI, auth), installs node deps
 # only if missing, verifies the workspace-side resources the app talks to
@@ -91,9 +91,9 @@ fi
 
 if [[ "$DO_PIPELINE" -eq 1 ]]; then
   _log "deploying continuous pipeline + starting simulator (async, output in /tmp)"
-  databricks bundle deploy -t dev >/tmp/pizza-vision-deploy.log 2>&1
-  databricks bundle run pizza_vision_pipeline -t dev >/tmp/pizza-vision-pipeline.log 2>&1 &
-  databricks bundle run pizza_vision_simulate -t dev >/tmp/pizza-vision-simulate.log 2>&1 &
+  databricks bundle deploy -t dev >/tmp/lens-iq-deploy.log 2>&1
+  databricks bundle run pizza_vision_pipeline -t dev >/tmp/lens-iq-pipeline.log 2>&1 &
+  databricks bundle run pizza_vision_simulate -t dev >/tmp/lens-iq-simulate.log 2>&1 &
 fi
 
 # --- preflight: workspace resources ------------------------------------------

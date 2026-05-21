@@ -1,5 +1,8 @@
+import { Readable } from "node:stream";
 import { analytics, createApp, files, serving, server, sql } from "@databricks/appkit";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
+import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
+import { getServingStatus } from "./serving-status.ts";
 
 // LensIQ AppKit server.
 //
@@ -81,35 +84,81 @@ interface NormalizedDetection {
   bbox: [number, number, number, number];
 }
 
-// Parse the YOLO PyFunc serving response. The deploy_yolo notebook configures
-// the PyFunc to return one detection list per input row, so Model Serving
-// produces `{ predictions: [ [ {label, class_id, confidence, bbox} ... ] ] }`.
-// AppKit's serving plugin wraps the model response one more time in
-// `{ ok, data }`, so we unwrap that first. We also accept the legacy shapes
-// (bare array or `{predictions: [...]}`) for robustness.
-function _normalizeDatabricks(raw: unknown): NormalizedDetection[] {
+interface ServingInvokeResult {
+  ok: boolean;
+  data?: unknown;
+  status?: number;
+  message?: string;
+}
+
+// Parse the YOLO / Roboflow PyFunc serving response. The deploy_yolo notebook
+// returns one detection list per input row, so Model Serving commonly emits
+// `{ predictions: [ [ {label, class_id, confidence, bbox} ... ] ] }`. AppKit's
+// serving plugin wraps that in `{ ok, data }`. Some endpoints return the inner
+// list directly as `data: [[...]]` or a flat `predictions: [{...}, ...]`.
+function _extractDetectionCandidates(raw: unknown): unknown[] {
   let body: unknown = raw;
-  if (raw && typeof raw === "object" && "data" in raw && "ok" in raw) {
-    body = (raw as { data: unknown }).data;
+  if (raw && typeof raw === "object" && "ok" in raw) {
+    const wrapped = raw as { ok: boolean; data?: unknown };
+    if (!wrapped.ok) return [];
+    if ("data" in wrapped) body = wrapped.data;
   }
 
-  let candidates: unknown[] = [];
-  if (Array.isArray(body)) {
-    candidates = body;
-  } else if (body && typeof body === "object" && "predictions" in body) {
-    const preds = (body as { predictions: unknown }).predictions;
-    if (Array.isArray(preds)) {
-      candidates = Array.isArray(preds[0]) ? (preds[0] as unknown[]) : preds;
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch {
+      return [];
     }
   }
 
+  let items: unknown[] = [];
+  if (Array.isArray(body)) {
+    items = body;
+  } else if (body && typeof body === "object") {
+    const obj = body as Record<string, unknown>;
+    if (Array.isArray(obj.predictions)) {
+      items = obj.predictions;
+    } else if (Array.isArray(obj.outputs)) {
+      items = obj.outputs;
+    }
+  }
+
+  // One list of detections per dataframe row: [[d1, d2], ...] -> [d1, d2, ...]
+  if (items.length > 0 && items.every((x) => Array.isArray(x))) {
+    const first = items[0] as unknown[];
+    if (first.length === 0 || (first[0] != null && typeof first[0] === "object")) {
+      items = items.flat();
+    }
+  } else if (
+    items.length === 1
+    && Array.isArray(items[0])
+    && (items[0] as unknown[]).every((x) => x != null && typeof x === "object")
+  ) {
+    items = items[0] as unknown[];
+  }
+
+  return items;
+}
+
+function _bboxFromRecord(rec: Record<string, unknown>): [number, number, number, number] | null {
+  if (Array.isArray(rec.bbox) && rec.bbox.length === 4) {
+    return rec.bbox.map((n) => Math.round(Number(n))) as [number, number, number, number];
+  }
+  const keys = ["x1", "y1", "x2", "y2"] as const;
+  if (keys.every((k) => typeof rec[k] === "number" || typeof rec[k] === "string")) {
+    return keys.map((k) => Math.round(Number(rec[k]))) as [number, number, number, number];
+  }
+  return null;
+}
+
+function _normalizeDatabricks(raw: unknown): NormalizedDetection[] {
+  const candidates = _extractDetectionCandidates(raw);
   const out: NormalizedDetection[] = [];
   for (const c of candidates) {
     if (!c || typeof c !== "object") continue;
     const rec = c as Record<string, unknown>;
-    const bbox = Array.isArray(rec.bbox) && rec.bbox.length === 4
-      ? (rec.bbox.map((n) => Math.round(Number(n))) as [number, number, number, number])
-      : null;
+    const bbox = _bboxFromRecord(rec);
     if (!bbox) continue;
     out.push({
       label: typeof rec.label === "string" ? rec.label : "object",
@@ -139,12 +188,21 @@ function _decodeImage(image: string): Buffer | null {
 }
 
 const AppKit = await createApp({
+  cache: {
+    enabled: true,
+    ttl: 60,
+    strictPersistence: false,
+  },
   plugins: [
     // In dev (NODE_ENV=development), AppKit mounts Vite middleware for HMR.
     // In prod, ServerPlugin.findStaticPath() picks up client/dist/ via its
     // auto-discovery probe order (dist, client/dist, build, public, out) -
     // see client/vite.config.ts for the matching output path.
-    server(),
+    // 8mb body limit gives plenty of headroom for high-res snapshots after
+    // captureVideoFrameForDetection / resizeDataUrlForDetection downscale the
+    // image client-side. Below this the Live tick stays well under 200KB; the
+    // snapshot/upload path tops out around 1MB even on busy 1080p frames.
+    server({ bodyLimit: "8mb" }),
     analytics({}),
     serving({
       endpoints: {
@@ -183,6 +241,103 @@ const AppKit = await createApp({
         });
       });
 
+      app.get("/api/serving-status/:alias", async (req, res) => {
+        const alias = typeof req.params.alias === "string" ? req.params.alias : "";
+        if (!alias) {
+          res.status(400).json({ error: "Missing serving alias." });
+          return;
+        }
+        const force = req.query.force === "1" || req.query.force === "true";
+        try {
+          const status = await getServingStatus(alias, { force });
+          res.json(status);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(502).json({ error: `Serving status failed (${alias}): ${message}` });
+        }
+      });
+
+      // ─── Sample videos ──────────────────────────────────────────────────
+      //
+      // Roboflow hosts the `supervision` library's video assets on a CDN that
+      // doesn't emit CORS headers (no Access-Control-Allow-Origin). A
+      // <video crossorigin="anonymous"> pointing at those URLs would render
+      // fine, but the moment we draw it into a <canvas> the canvas gets
+      // "tainted" and subsequent toDataURL() calls throw a SecurityError - so
+      // the Live page's detection loop can't grab frames.
+      //
+      // To make those assets usable, we re-host them through this proxy.
+      // Range/Content-Range/Content-Length are forwarded so the browser can
+      // seek smoothly. The upstream catalog lives in client/src/lib/samples.ts
+      // so the client and server share one source of truth.
+
+      app.get("/api/sample-videos", (_req, res) => {
+        res.json({
+          samples: SAMPLE_VIDEOS.map((s) => ({
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            models: s.models,
+            url: `/api/sample-videos/${s.id}`,
+          })),
+        });
+      });
+
+      app.get("/api/sample-videos/:id", async (req, res) => {
+        const sample = getSampleVideo(req.params.id);
+        if (!sample) {
+          res.status(404).json({ error: `Unknown sample id: ${req.params.id}` });
+          return;
+        }
+
+        const upstreamHeaders: Record<string, string> = {};
+        if (typeof req.headers.range === "string") {
+          upstreamHeaders.range = req.headers.range;
+        }
+
+        let upstreamRes: Response;
+        try {
+          upstreamRes = await fetch(sample.upstream, { headers: upstreamHeaders });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(502).json({ error: `Sample upstream failed: ${message}` });
+          return;
+        }
+
+        // 200 (full body) and 206 (range response) both carry usable bytes.
+        // Anything else means the upstream rejected us and there's nothing
+        // useful to forward.
+        if (upstreamRes.status !== 200 && upstreamRes.status !== 206) {
+          res.status(upstreamRes.status).end();
+          return;
+        }
+
+        const passthroughHeaders = [
+          "content-type",
+          "content-length",
+          "content-range",
+          "accept-ranges",
+          "last-modified",
+          "etag",
+        ];
+        for (const name of passthroughHeaders) {
+          const value = upstreamRes.headers.get(name);
+          if (value) res.setHeader(name, value);
+        }
+        res.setHeader("cache-control", "public, max-age=3600");
+        res.status(upstreamRes.status);
+
+        if (!upstreamRes.body) {
+          res.end();
+          return;
+        }
+        // Node's typings for Readable.fromWeb expect a node-stream/web
+        // ReadableStream; the global fetch returns the slightly different DOM
+        // type. They're structurally compatible at runtime so a single cast
+        // is enough.
+        Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+      });
+
       app.post("/api/detect", async (req, res) => {
         const { image, conf = 0.35, iou = 0.5, persist = false, model: modelId = DEFAULT_MODEL_ID } = req.body ?? {};
         if (!image || typeof image !== "string") {
@@ -204,10 +359,16 @@ const AppKit = await createApp({
 
         let detections: NormalizedDetection[] = [];
         try {
-          const raw = await appkit.serving(model.servingAlias).asUser(req).invoke({
+          const result = (await appkit.serving(model.servingAlias).asUser(req).invoke({
             dataframe_records: [row],
-          });
-          detections = _normalizeDatabricks(raw);
+          })) as ServingInvokeResult;
+          if (!result.ok) {
+            res.status(result.status ?? 502).json({
+              error: `Detector failed (${model.id}): ${result.message ?? "Serving invoke failed"}`,
+            });
+            return;
+          }
+          detections = _normalizeDatabricks(result);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           res.status(502).json({ error: `Detector failed (${model.id}): ${message}` });

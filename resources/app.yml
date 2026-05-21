@@ -3,8 +3,8 @@
 # `databricks bundle run pizza_vision_deploy_yolo -t racetrac` completes).
 resources:
   apps:
-    pizza_vision_app:
-      name: pizza-vision-app
+    lens_iq:
+      name: lens-iq
       description: LensIQ - computer vision dashboard for QSR / gas stations / convenience stores.
       source_code_path: ../
       user_api_scopes:

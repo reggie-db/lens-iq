@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import toast from "react-hot-toast";
 import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@databricks/appkit-ui/react";
 import { Upload as UploadIcon } from "lucide-react";
+import { SNAPSHOT_MAX_DIMENSION, resizeDataUrlForDetection } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
 
 // Static image upload. Reads the file as a base64 data URL, posts it to the
@@ -44,10 +45,18 @@ export function UploadPage() {
   };
 
   const handleSubmit = async () => {
-    if (!preview) return;
+    if (!preview || !file) return;
     setSubmitting(true);
     try {
-      const r = await callDetector(preview, { persist: true });
+      const frame = await resizeDataUrlForDetection(preview, 0, 0, {
+        maxDimension: SNAPSHOT_MAX_DIMENSION,
+        quality: 0.78,
+      });
+      if (!frame) {
+        toast.error("Could not prepare image for detection.");
+        return;
+      }
+      const r = await callDetector(frame.image, { persist: true });
       setResult(r);
       const noun = `${r.detections.length} object${r.detections.length === 1 ? "" : "s"}`;
       if (r.saved) {

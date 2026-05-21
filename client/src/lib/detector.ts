@@ -51,7 +51,11 @@ export async function callDetector(
       const parsed = JSON.parse(text);
       if (parsed?.error) message = parsed.error;
     } catch {
-      // Not JSON, keep the raw text.
+      if (res.status === 413 || /payload too large/i.test(text)) {
+        message = "Image payload too large. The Live page downscales frames automatically; retry or lower FPS.";
+      } else if (text.trimStart().startsWith("<")) {
+        message = `Detector failed (HTTP ${res.status}). The server returned an HTML error page instead of JSON.`;
+      }
     }
     throw new Error(message);
   }

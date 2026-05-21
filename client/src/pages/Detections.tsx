@@ -32,7 +32,7 @@ const _ICON_MAP: Record<string, typeof Car> = {
 
 const MAX_STREAM_EVENTS = 12;
 
-export function DetectionsPage({ alertsEnabled }: { alertsEnabled: boolean }) {
+export function DetectionsPage() {
   const summaryParams = useMemo(() => ({ period: sql.string("today") }), []);
   const recentParams = useMemo(() => ({ max_rows: sql.number(20) }), []);
   const noParams = useMemo(() => ({}), []);
@@ -43,11 +43,10 @@ export function DetectionsPage({ alertsEnabled }: { alertsEnabled: boolean }) {
 
   const [streamEvents, setStreamEvents] = useState<StreamEvent[]>([]);
 
+  // SSE subscription is always on: the page mounts -> open EventSource,
+  // unmount -> close. /api/detections/stream is backed by the analytics
+  // plugin polling the detections table every POLL_INTERVAL_MS.
   useEffect(() => {
-    if (!alertsEnabled) {
-      setStreamEvents([]);
-      return;
-    }
     const evt = new EventSource("/api/detections/stream");
     evt.addEventListener("detection", (e) => {
       try {
@@ -58,7 +57,7 @@ export function DetectionsPage({ alertsEnabled }: { alertsEnabled: boolean }) {
       }
     });
     return () => evt.close();
-  }, [alertsEnabled]);
+  }, []);
 
   if (summaryLoading && !summary) {
     return <Skeleton className="h-96 w-full" />;
@@ -144,12 +143,10 @@ export function DetectionsPage({ alertsEnabled }: { alertsEnabled: boolean }) {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Camera className="w-5 h-5" />
-            Live Detection Stream {alertsEnabled ? <Badge variant="default">on</Badge> : <Badge variant="outline">off</Badge>}
+            Live Detection Stream
           </CardTitle>
           <CardDescription>
-            {alertsEnabled
-              ? "Streaming new detections from /api/detections/stream"
-              : "Toggle the sidebar switch to subscribe to live events"}
+            Streaming new detections from /api/detections/stream
           </CardDescription>
         </CardHeader>
         <CardContent>

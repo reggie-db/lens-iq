@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import {
   Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch,
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@databricks/appkit-ui/react";
 import { OverviewPage } from "./pages/Overview";
 import { DevicesPage } from "./pages/Devices";
@@ -66,12 +66,10 @@ function NavButton({ view, label, icon: Icon, activeView, onNavigate, hidden }: 
 interface NavItemsProps {
   activeView: string;
   userRole: Role;
-  alertsEnabled: boolean;
-  onAlertsToggle: (enabled: boolean) => void;
   onItemClick?: () => void;
 }
 
-function NavItems({ activeView, userRole, alertsEnabled, onAlertsToggle, onItemClick }: NavItemsProps) {
+function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
   const navigate = useNavigate();
   const handle = (view: string) => {
     if (userRole === "Store Manager" && RESTRICTED_VIEWS.includes(view)) return;
@@ -100,16 +98,6 @@ function NavItems({ activeView, userRole, alertsEnabled, onAlertsToggle, onItemC
       <NavButton view="alerts"     label="Alerts"        icon={Bell}            activeView={activeView} onNavigate={handle} />
       <NavButton view="devices"    label="All Devices"   icon={Cpu}             activeView={activeView} onNavigate={handle} />
       <NavButton view="search"     label="Data Search"   icon={Database}        activeView={activeView} onNavigate={handle} hidden={restricted("search")} />
-
-      <div className="my-2 border-t border-slate-200" />
-
-      <div className="flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-slate-100 transition-colors">
-        <div className="flex items-center gap-2">
-          <Camera className="w-4 h-4 text-slate-600" />
-          <span className="text-sm text-slate-700">Live Detection Stream</span>
-        </div>
-        <Switch checked={alertsEnabled} onCheckedChange={onAlertsToggle} />
-      </div>
     </nav>
   );
 }
@@ -119,7 +107,6 @@ export default function App() {
   const activeView = location.pathname.slice(1) || "live";
 
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [alertsEnabled, setAlertsEnabled] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
 
   return (
@@ -135,12 +122,7 @@ export default function App() {
           </div>
         </div>
         <div className="flex-1 p-4 overflow-y-auto">
-          <NavItems
-            activeView={activeView}
-            userRole={userRole}
-            alertsEnabled={alertsEnabled}
-            onAlertsToggle={setAlertsEnabled}
-          />
+          <NavItems activeView={activeView} userRole={userRole} />
         </div>
       </aside>
 
@@ -163,8 +145,6 @@ export default function App() {
                       <NavItems
                         activeView={activeView}
                         userRole={userRole}
-                        alertsEnabled={alertsEnabled}
-                        onAlertsToggle={setAlertsEnabled}
                         onItemClick={() => setDrawerOpen(false)}
                       />
                     </div>
@@ -205,7 +185,7 @@ export default function App() {
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/alerts" element={<AlertsPage />} />
-            <Route path="/detections" element={<DetectionsPage alertsEnabled={alertsEnabled} />} />
+            <Route path="/detections" element={<DetectionsPage />} />
             <Route path="/plates" element={<PlatesPage />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/inventory" element={<InventoryPage />} />

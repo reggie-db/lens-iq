@@ -64,6 +64,13 @@ declare module "@databricks/appkit" {
       };
       chunk: unknown;
     };
+    roboflow_detector: {
+      request: Record<string, unknown>;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
+      chunk: unknown;
+    };
   }
 }
 
@@ -122,6 +129,13 @@ declare module "@databricks/appkit-ui/react" {
       };
     };
     detector: {
+      request: Record<string, unknown>;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
+      chunk: unknown;
+    };
+    roboflow_detector: {
       request: Record<string, unknown>;
       response: {
         predictions?: Record<string, unknown>[];
