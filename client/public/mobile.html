@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en" class="h-full overflow-hidden">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#000000" />
+  <title>LensIQ Mobile</title>
+  <style>
+    * {
+      touch-action: manipulation;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    body {
+      overscroll-behavior: none;
+      -webkit-overflow-scrolling: touch;
+      position: fixed;
+      inset: 0;
+      background: #000;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    /* Hide controls overlay when in immersive mode */
+    body.immersive .ui-overlay {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .ui-overlay {
+      transition: opacity 200ms ease-out;
+    }
+    /* Spinner */
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 3px solid rgba(255, 255, 255, 0.2);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: { colors: { brand: '#dc2626', brandDark: '#b91c1c' } } }
+    };
+  </script>
+</head>
+
+<body class="h-full w-full overflow-hidden text-white">
+  <div id="stage" class="absolute inset-0 flex items-center justify-center">
+    <!-- Live camera feed -->
+    <video id="video" autoplay playsinline muted
+      class="absolute inset-0 w-full h-full object-contain bg-black"></video>
+    <!-- Bounding-box overlay. object-contain mirrors the video letterboxing
+         so bboxes never drift onto the black bars on portrait sources. -->
+    <canvas id="canvas"
+      class="absolute inset-0 w-full h-full object-contain pointer-events-none"></canvas>
+
+    <!-- Top-left model badge -->
+    <div class="ui-overlay absolute top-3 left-3">
+      <div id="badge"
+        class="px-2.5 py-1 rounded-md bg-white/85 text-slate-900 text-xs font-medium backdrop-blur flex items-center gap-1.5">
+        <span id="badgeDot" class="inline-block w-2 h-2 rounded-full bg-brand"></span>
+        <span id="badgeText">LensIQ</span>
+      </div>
+    </div>
+
+    <!-- Top-right stats pill: current detection count + rolling 60s count -->
+    <div class="ui-overlay absolute top-3 right-3">
+      <div class="px-2.5 py-1 rounded-md bg-black/55 text-white text-xs tabular-nums backdrop-blur flex items-center gap-2">
+        <span id="frameCount">0</span>
+        <span class="opacity-50">|</span>
+        <span><span id="windowCount">0</span><span class="opacity-50">/60s</span></span>
+      </div>
+    </div>
+
+    <!-- Cold-start spinner overlay. Hidden by default; shown when an
+         /api/detect call has been in flight long enough to suggest the
+         endpoint scaled to zero. -->
+    <div id="pending"
+      class="absolute inset-0 hidden items-center justify-center bg-black/45 backdrop-blur-[2px]">
+      <div class="flex flex-col items-center gap-3 px-5 py-4 rounded-lg bg-black/70">
+        <div class="spinner"></div>
+        <div id="pendingTitle" class="text-sm font-medium">Detecting</div>
+        <div id="pendingHint" class="text-xs text-slate-300">Warming up...</div>
+      </div>
+    </div>
+
+    <!-- Bottom controls. Tap the video to toggle. -->
+    <div class="ui-overlay absolute left-0 right-0 bottom-0 p-3"
+      style="padding-bottom: max(0.75rem, env(safe-area-inset-bottom))">
+      <div class="bg-white/95 backdrop-blur rounded-2xl shadow-lg border border-slate-200 p-3 flex flex-col gap-3 text-slate-900">
+        <div class="flex items-center gap-2">
+          <label for="model" class="text-xs font-medium text-slate-600 shrink-0">Detector</label>
+          <select id="model"
+            class="flex-1 text-sm bg-white border border-slate-200 rounded-lg px-2.5 py-2 focus:outline-none focus:border-brand">
+            <option value="">Loading...</option>
+          </select>
+        </div>
+        <div class="flex items-center gap-2">
+          <label for="fps" class="text-xs font-medium text-slate-600 shrink-0">FPS</label>
+          <input id="fps" type="range" min="1" max="6" step="1" value="2"
+            class="flex-1 accent-brand" />
+          <span id="fpsLabel" class="text-xs font-mono w-6 text-right">2</span>
+          <button id="switchBtn"
+            class="px-3 py-2 text-xs font-medium text-white bg-brand hover:bg-brandDark rounded-lg shrink-0 hidden">
+            Flip
+          </button>
+        </div>
+        <div id="status" class="text-[11px] text-slate-500 break-words leading-snug min-h-[1.2em]"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // LensIQ mobile capture page. Self-contained: opens the device camera,
+    // captures one frame per tick, POSTs to /api/detect, and overlays the
+    // returned bounding boxes on the live video. No React, no bundle.
+    //
+    // Coordinate-system contract (mirrors client/src/lib/camera.ts):
+    //   1. Source video is video.videoWidth x video.videoHeight.
+    //   2. We draw it onto a hidden canvas downscaled to DETECT_MAX_DIMENSION
+    //      on the longest edge, JPEG-encode at JPEG_QUALITY, base64 it.
+    //   3. /api/detect returns bboxes in the *downscaled* coord space.
+    //   4. We multiply by scaleX/scaleY to map back to source pixels, then
+    //      paint onto a visible canvas sized to the source pixels. The
+    //      visible canvas uses CSS object-contain so it letterboxes the
+    //      same way the <video> does on portrait/non-16:9 sources.
+
+    // === Configuration ===
+    const DETECT_MAX_DIMENSION = 640;       // Longest edge sent to /api/detect.
+    const JPEG_QUALITY = 0.62;              // JPEG quality for detection frames.
+    const VIDEO_WIDTH_IDEAL = 1280;
+    const VIDEO_HEIGHT_IDEAL = 720;
+    const HISTORY_WINDOW_MS = 60_000;
+    const PENDING_OVERLAY_THRESHOLD_MS = 1500;
+    const PENDING_FORCE_REFRESH_MS = 3000;
+    const SERVING_STATUS_POLL_MS = 45_000;
+    const IMMERSIVE_AUTO_HIDE_MS = 4000;
+
+    // === DOM ===
+    const $ = (id) => document.getElementById(id);
+    const video = $("video");
+    const canvas = $("canvas");
+    const ctx = canvas.getContext("2d");
+    const modelSelect = $("model");
+    const fpsInput = $("fps");
+    const fpsLabel = $("fpsLabel");
+    const switchBtn = $("switchBtn");
+    const statusEl = $("status");
+    const badgeText = $("badgeText");
+    const badgeDot = $("badgeDot");
+    const frameCountEl = $("frameCount");
+    const windowCountEl = $("windowCount");
+    const pendingEl = $("pending");
+    const pendingTitle = $("pendingTitle");
+    const pendingHint = $("pendingHint");
+
+    // === State ===
+    let models = [];                  // Catalog of detectors from /api/models.
+    let currentModel = null;          // Currently selected model record.
+    let videoTrack = null;
+    let useEnvironment = true;        // Prefer back camera.
+    let hasMultipleCameras = false;
+    let inFlight = false;
+    let pendingSince = null;
+    let tickHandle = null;
+    let endpointReady = true;
+    let endpointState = "READY";
+    let endpointPollHandle = null;
+    let lastFetchedAlias = null;
+    let history = [];                 // Rolling detection history for stats.
+    let detections = [];              // Last frame's detections.
+    let videoSize = { w: 0, h: 0 };
+    let immersiveTimer = null;
+
+    // === Stats ===
+    const setStatus = (msg) => { statusEl.textContent = msg || ""; };
+    const setBadge = (model) => {
+      badgeText.textContent = model?.name || "LensIQ";
+      badgeDot.style.backgroundColor = model?.color || "#dc2626";
+    };
+
+    function pruneHistory() {
+      const cutoff = Date.now() - HISTORY_WINDOW_MS;
+      if (history.length && history[0] < cutoff) {
+        history = history.filter((ts) => ts >= cutoff);
+      }
+    }
+    function refreshStats() {
+      pruneHistory();
+      frameCountEl.textContent = String(detections.length);
+      windowCountEl.textContent = String(history.length);
+    }
+    setInterval(refreshStats, 1000);
+
+    // === Immersive (tap-to-toggle controls) ===
+    function bumpImmersive() {
+      document.body.classList.remove("immersive");
+      clearTimeout(immersiveTimer);
+      immersiveTimer = setTimeout(() => {
+        document.body.classList.add("immersive");
+      }, IMMERSIVE_AUTO_HIDE_MS);
+    }
+    $("stage").addEventListener("click", (e) => {
+      // Ignore taps that originated inside the bottom-controls card.
+      if (e.target.closest(".bg-white\\/95")) return;
+      if (document.body.classList.contains("immersive")) {
+        bumpImmersive();
+      } else {
+        document.body.classList.add("immersive");
+      }
+    });
+    bumpImmersive();
+
+    // === Models ===
+    async function loadModels() {
+      try {
+        const res = await fetch("/api/models");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const body = await res.json();
+        models = Array.isArray(body.models) ? body.models : [];
+        const defaultId = body.default;
+        modelSelect.innerHTML = "";
+        for (const m of models) {
+          const opt = document.createElement("option");
+          opt.value = m.id;
+          opt.textContent = m.name;
+          modelSelect.appendChild(opt);
+        }
+        if (models.length > 0) {
+          modelSelect.value = defaultId && models.some((m) => m.id === defaultId)
+            ? defaultId
+            : models[0].id;
+          currentModel = models.find((m) => m.id === modelSelect.value) || models[0];
+          setBadge(currentModel);
+        }
+      } catch (err) {
+        setStatus("Could not load detector list: " + err.message);
+      }
+    }
+    modelSelect.addEventListener("change", () => {
+      currentModel = models.find((m) => m.id === modelSelect.value) || null;
+      detections = [];
+      history = [];
+      refreshStats();
+      drawDetections();
+      setBadge(currentModel);
+      lastFetchedAlias = null; // re-poll readiness for the new endpoint
+      void pollServingStatus(false);
+    });
+
+    // === FPS slider ===
+    fpsInput.addEventListener("input", () => {
+      fpsLabel.textContent = fpsInput.value;
+      startTickLoop();
+    });
+
+    // === Camera ===
+    async function listCameraCount() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        return devices.filter((d) => d.kind === "videoinput").length;
+      } catch { return 0; }
+    }
+
+    async function requestCamera() {
+      const constraints = {
+        video: {
+          facingMode: { ideal: useEnvironment ? "environment" : "user" },
+          width: { ideal: VIDEO_WIDTH_IDEAL, max: VIDEO_WIDTH_IDEAL },
+          height: { ideal: VIDEO_HEIGHT_IDEAL, max: VIDEO_HEIGHT_IDEAL },
+        },
+        audio: false,
+      };
+      try {
+        if (video.srcObject) {
+          for (const t of video.srcObject.getTracks()) t.stop();
+          video.srcObject = null;
+        }
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        videoTrack = stream.getVideoTracks()[0] || null;
+        const settings = videoTrack?.getSettings?.() || {};
+        setStatus(`Camera ready (${settings.width ?? "?"}x${settings.height ?? "?"})`);
+
+        // Show the flip button only if there are actually multiple cameras.
+        if (!hasMultipleCameras) {
+          const n = await listCameraCount();
+          hasMultipleCameras = n > 1;
+          if (hasMultipleCameras) switchBtn.classList.remove("hidden");
+        }
+
+        await video.play().catch(() => {});
+        await new Promise((resolve) => {
+          if (video.videoWidth > 0) return resolve();
+          video.addEventListener("loadedmetadata", () => resolve(), { once: true });
+        });
+        videoSize = { w: video.videoWidth, h: video.videoHeight };
+        canvas.width = videoSize.w;
+        canvas.height = videoSize.h;
+      } catch (err) {
+        // If back camera failed, retry with front before giving up.
+        if (useEnvironment) {
+          useEnvironment = false;
+          setStatus("Back camera unavailable; falling back to front camera...");
+          return await requestCamera();
+        }
+        setStatus("Camera error: " + (err?.message || err));
+        throw err;
+      }
+    }
+
+    switchBtn.addEventListener("click", async () => {
+      useEnvironment = !useEnvironment;
+      try { await requestCamera(); } catch {}
+    });
+
+    // === Frame capture + detection ===
+    function _fitWithinBox(w, h, max) {
+      const longest = Math.max(w, h);
+      if (longest <= max) return { w, h };
+      const scale = max / longest;
+      return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
+    }
+
+    function captureFrame() {
+      if (video.readyState < 2) return null;
+      const w = video.videoWidth, h = video.videoHeight;
+      if (!w || !h) return null;
+      const { w: dw, h: dh } = _fitWithinBox(w, h, DETECT_MAX_DIMENSION);
+      const c = document.createElement("canvas");
+      c.width = dw; c.height = dh;
+      const cctx = c.getContext("2d");
+      cctx.drawImage(video, 0, 0, w, h, 0, 0, dw, dh);
+      return {
+        image: c.toDataURL("image/jpeg", JPEG_QUALITY),
+        scaleX: w / dw,
+        scaleY: h / dh,
+        sourceW: w,
+        sourceH: h,
+      };
+    }
+
+    async function callDetect(image, modelId) {
+      const res = await fetch("/api/detect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image, model: modelId, conf: 0.35, iou: 0.5 }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        let msg = text || `HTTP ${res.status}`;
+        try { const j = JSON.parse(text); if (j.error) msg = j.error; } catch {}
+        if (res.status === 413) msg = "Image payload too large (mobile should not hit this; check FPS).";
+        throw new Error(msg);
+      }
+      return res.json();
+    }
+
+    async function tick() {
+      if (inFlight || !currentModel) return;
+      const frame = captureFrame();
+      if (!frame) return;
+      // Snapshot source dimensions and scale factors before the await so they
+      // can't change mid-flight if the user switches cameras while the
+      // request is open.
+      const w = frame.sourceW, h = frame.sourceH;
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+      videoSize = { w, h };
+
+      inFlight = true;
+      pendingSince = Date.now();
+      try {
+        const body = await callDetect(frame.image, currentModel.id);
+        const items = Array.isArray(body?.detections) ? body.detections : [];
+        detections = items.map((d) => ({
+          label: d.label || "object",
+          confidence: typeof d.confidence === "number" ? d.confidence : 0,
+          bbox: Array.isArray(d.bbox) && d.bbox.length === 4
+            ? [
+                Math.round(d.bbox[0] * frame.scaleX),
+                Math.round(d.bbox[1] * frame.scaleY),
+                Math.round(d.bbox[2] * frame.scaleX),
+                Math.round(d.bbox[3] * frame.scaleY),
+              ]
+            : [0, 0, 0, 0],
+        }));
+        const now = Date.now();
+        for (const _ of detections) history.push(now);
+        pruneHistory();
+        refreshStats();
+        drawDetections();
+        setStatus(`Detected ${detections.length} object(s)`);
+      } catch (err) {
+        detections = [];
+        drawDetections();
+        setStatus(err?.message || String(err));
+      } finally {
+        inFlight = false;
+        pendingSince = null;
+        updatePendingOverlay();
+      }
+    }
+
+    function startTickLoop() {
+      if (tickHandle) clearInterval(tickHandle);
+      const fps = Math.max(1, Math.min(6, parseInt(fpsInput.value, 10) || 2));
+      const intervalMs = 1000 / fps;
+      tickHandle = setInterval(tick, intervalMs);
+    }
+
+    // === Bounding-box rendering ===
+    function _hexToRgba(hex, alpha) {
+      const m = String(hex || "").match(/^#?([0-9a-fA-F]{6})$/);
+      if (!m) return `rgba(220, 38, 38, ${alpha})`;
+      const n = parseInt(m[1], 16);
+      return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+    }
+
+    function drawDetections() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (!detections.length) return;
+      const color = currentModel?.color || "#dc2626";
+      const fill = _hexToRgba(color, 0.9);
+      ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
+      ctx.font = `${Math.max(14, Math.round(canvas.width / 60))}px sans-serif`;
+      for (const d of detections) {
+        const [x1, y1, x2, y2] = d.bbox;
+        ctx.strokeStyle = color;
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
+        const padding = 4;
+        const labelHeight = Math.max(18, Math.round(canvas.width / 50));
+        const tw = ctx.measureText(label).width + padding * 2;
+        ctx.fillStyle = fill;
+        ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
+        ctx.fillStyle = "white";
+        ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
+      }
+    }
+
+    // === Cold-start overlay ===
+    // /api/models exposes the serving alias per model so we can poll
+    // /api/serving-status/<alias> for the exact endpoint backing the
+    // selected detector. That status route is AppKit-cached on the server;
+    // when a tick stalls past PENDING_FORCE_REFRESH_MS we hit it with
+    // ?force=1 so the overlay copy reflects real endpoint state.
+    async function pollServingStatus(force) {
+      const alias = currentModel?.servingAlias;
+      if (!alias) return;
+      try {
+        const qs = force ? "?force=1" : "";
+        const res = await fetch(`/api/serving-status/${encodeURIComponent(alias)}${qs}`);
+        if (!res.ok) return;
+        const body = await res.json();
+        endpointReady = !!body.ready;
+        endpointState = body.state || "UNKNOWN";
+        lastFetchedAlias = alias;
+        updatePendingOverlay();
+      } catch {}
+    }
+
+    function updatePendingOverlay() {
+      if (pendingSince == null) {
+        pendingEl.classList.add("hidden");
+        pendingEl.classList.remove("flex");
+        return;
+      }
+      const elapsed = Date.now() - pendingSince;
+      if (elapsed < PENDING_OVERLAY_THRESHOLD_MS) {
+        pendingEl.classList.add("hidden");
+        pendingEl.classList.remove("flex");
+        return;
+      }
+      const seconds = Math.floor(elapsed / 1000);
+      if (endpointReady) {
+        pendingTitle.textContent = "Detecting";
+        pendingHint.textContent = seconds > 4 ? `Slow response (${seconds}s)...` : "";
+      } else {
+        pendingTitle.textContent = "Waking detection endpoint";
+        pendingHint.textContent =
+          `Cold start (${endpointState}). Elapsed: ${seconds}s. Endpoints scale to zero.`;
+      }
+      pendingEl.classList.remove("hidden");
+      pendingEl.classList.add("flex");
+    }
+
+    // Drive the overlay clock and trigger a force-refresh once the request
+    // is slow enough to look like a cold start (instead of a regular slow
+    // tick).
+    setInterval(() => {
+      if (pendingSince == null) return;
+      const elapsed = Date.now() - pendingSince;
+      if (elapsed > PENDING_FORCE_REFRESH_MS && endpointReady) void pollServingStatus(true);
+      updatePendingOverlay();
+    }, 500);
+
+    // === Boot ===
+    (async function init() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setStatus("This browser does not expose getUserMedia.");
+        return;
+      }
+      await loadModels();
+      try {
+        await requestCamera();
+      } catch { return; }
+      startTickLoop();
+      void pollServingStatus(false);
+      endpointPollHandle = setInterval(() => void pollServingStatus(false), SERVING_STATUS_POLL_MS);
+    })();
+  </script>
+</body>
+
+</html>

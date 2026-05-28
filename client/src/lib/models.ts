@@ -1,18 +1,27 @@
 // Shared registry of all object-detection models exposed by the app.
 //
 // Every model is served through Databricks Model Serving via the AppKit
-// `serving()` plugin. Two endpoint aliases exist:
+// `serving()` plugin. Each use case has its own dedicated endpoint and its
+// own UC registered model so versioning, ownership, scale-to-zero, and
+// cost attribution are independent per detector:
 //
-//   - "detector":          single-model YOLO PyFunc (general objects). Defined
-//                          by notebooks/deploy_yolo.ipynb.
-//   - "roboflow_detector": multi-model Roboflow PyFunc that dispatches by
-//                          `model_id`. Defined by
-//                          notebooks/deploy_roboflow_models.ipynb. A single
-//                          endpoint hosts every Roboflow Universe model.
+//   id                | servingAlias       | endpoint name (default)
+//   ------------------|--------------------|---------------------------
+//   yolo              | detector           | lensiq-detector
+//   license_plate     | license_plate      | lensiq-license-plate
+//   spill             | spill              | lensiq-spill
+//   wet_floor_sign    | wet_floor_sign     | lensiq-wet-floor-sign
+//   cigarette_vape    | cigarette_vape     | lensiq-cigarette-vape
+//   slip_fall         | slip_fall          | lensiq-slip-fall
+//   fog_detector      | fog_detector       | lensiq-fog-detector
 //
-// `roboflowModelId` (when present) is passed as the `model_id` row column to
-// the multi-model endpoint so it picks the right submodel. `color` drives the
-// bounding-box overlay and chart tinting on the Live page.
+// `servingAlias` is the key registered with `serving()` in server/server.ts
+// and bound to a real endpoint in resources/app.yml. There is no dispatch
+// layer: the client sends `model_id` to the server, the server maps it to
+// `model.servingAlias` and invokes that endpoint directly.
+//
+// `color` drives the bounding-box overlay and chart tinting on the Live
+// page.
 
 export type ModelProvider = "databricks";
 
@@ -23,9 +32,6 @@ export interface ModelDefinition {
   provider: ModelProvider;
   color: string;
   servingAlias: string;
-  // Only set when `servingAlias === "roboflow_detector"`. Identifies which
-  // Roboflow Universe model the multi-model endpoint should dispatch to.
-  roboflowModelId?: string;
 }
 
 export const MODELS: ModelDefinition[] = [
@@ -42,8 +48,7 @@ export const MODELS: ModelDefinition[] = [
     name: "License plates",
     description: "Detects vehicle license plates. Useful for drive-through plate capture and forecourt analytics.",
     provider: "databricks",
-    servingAlias: "roboflow_detector",
-    roboflowModelId: "roboflow-universe-projects/license-plate-recognition-rxg4e/13",
+    servingAlias: "license_plate",
     color: "#0ea5e9",
   },
   {
@@ -51,8 +56,7 @@ export const MODELS: ModelDefinition[] = [
     name: "Spills",
     description: "Detects liquid spills on store floors and forecourts. Pair with the wet-floor sign model to confirm signage.",
     provider: "databricks",
-    servingAlias: "roboflow_detector",
-    roboflowModelId: "cv-6rgre/spills-ax5xv/2",
+    servingAlias: "spill",
     color: "#eab308",
   },
   {
@@ -60,8 +64,7 @@ export const MODELS: ModelDefinition[] = [
     name: "Wet floor sign",
     description: "Detects wet-floor caution signs. Pair with the spill model to validate that signage is deployed.",
     provider: "databricks",
-    servingAlias: "roboflow_detector",
-    roboflowModelId: "june-2023-wet-floor-sign/wet-floor-sign2/1",
+    servingAlias: "wet_floor_sign",
     color: "#f97316",
   },
   {
@@ -69,8 +72,7 @@ export const MODELS: ModelDefinition[] = [
     name: "Cigarette / vape",
     description: "Loss-prevention model. Detects cigarettes and vapes around c-store age-gated areas.",
     provider: "databricks",
-    servingAlias: "roboflow_detector",
-    roboflowModelId: "takoyati/cigarette-vape-detection/14",
+    servingAlias: "cigarette_vape",
     color: "#a855f7",
   },
   {
@@ -78,9 +80,20 @@ export const MODELS: ModelDefinition[] = [
     name: "Slip & fall",
     description: "Detects standing vs fallen persons. Pair with the spill model for incident response.",
     provider: "databricks",
-    servingAlias: "roboflow_detector",
-    roboflowModelId: "sensormatic/slip-and-fall/2",
+    servingAlias: "slip_fall",
     color: "#10b981",
+  },
+  // Camera-health classifier. Standalone Pillow+numpy PyFunc (no external
+  // API) that flags fogged / contaminated lenses and returns localized
+  // bboxes around affected regions. Deployed by
+  // notebooks/deploy_fog_detector.ipynb.
+  {
+    id: "fog_detector",
+    name: "Camera fog / lens condition",
+    description: "Diagnostic classifier that flags fogged or contaminated camera lenses. Use it to monitor camera health on freezer/cooler aisles, dome cameras with condensation, or outdoor PTZ cameras after rain.",
+    provider: "databricks",
+    servingAlias: "fog_detector",
+    color: "#06b6d4",
   },
 ];
 

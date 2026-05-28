@@ -16,10 +16,22 @@ env:
     valueFrom: llm
   - name: DATABRICKS_SERVING_ENDPOINT_LLM
     valueFrom: llm
+  # Per-detector serving endpoints. Each maps to an AppKit `serving()`
+  # alias in server/server.ts and an entry in client/src/lib/models.ts.
   - name: DATABRICKS_SERVING_ENDPOINT_DETECTOR
     valueFrom: detector
-  - name: DATABRICKS_SERVING_ENDPOINT_ROBOFLOW_DETECTOR
-    valueFrom: roboflow_detector
+  - name: DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE
+    valueFrom: license_plate
+  - name: DATABRICKS_SERVING_ENDPOINT_SPILL
+    valueFrom: spill
+  - name: DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN
+    valueFrom: wet_floor_sign
+  - name: DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE
+    valueFrom: cigarette_vape
+  - name: DATABRICKS_SERVING_ENDPOINT_SLIP_FALL
+    valueFrom: slip_fall
+  - name: DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR
+    valueFrom: fog_detector
   # Volume paths are supplied as plain values rather than `valueFrom: <binding>`
   # because granting the app SP USE CATALOG on shared catalogs requires MANAGE
   # which the deploy user may not have. The files plugin acts OBO, so per-user
@@ -30,3 +42,13 @@ env:
     value: /Volumes/iot_dev/lensiq/frames
   - name: DATABRICKS_VOLUME_INBOX
     value: /Volumes/iot_dev/lensiq/frames_inbox
+  # Lakebase Postgres binding. PGHOST / PGDATABASE / LAKEBASE_ENDPOINT are
+  # auto-resolved from the `postgres` resource declared in resources/app.yml.
+  # The AppKit lakebase plugin reads these to build the connection pool and
+  # handles OAuth credential refresh against the app SP.
+  - name: PGHOST
+    valueFrom: postgres
+  - name: PGDATABASE
+    valueFrom: postgres
+  - name: LAKEBASE_ENDPOINT
+    valueFrom: postgres

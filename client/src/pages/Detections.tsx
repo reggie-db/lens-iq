@@ -139,7 +139,7 @@ export function DetectionsPage() {
         </Card>
       </div>
 
-      <Card>
+      <Card data-tour="detections-stream">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Camera className="w-5 h-5" />

@@ -1,9 +1,19 @@
 import { CacheManager, getExecutionContext } from "@databricks/appkit";
 
+// Map from AppKit `serving()` alias to the env var the platform sets when a
+// resource binding from resources/app.yml resolves. Must stay aligned with
+// the `serving()` plugin call in server.ts and the `servingAlias` values in
+// client/src/lib/models.ts. Aliases not in this map resolve to an empty
+// endpoint name and the readiness probe short-circuits to NOT_CONFIGURED.
 const SERVING_ALIAS_ENV: Record<string, string> = {
-  detector: "DATABRICKS_SERVING_ENDPOINT_DETECTOR",
-  roboflow_detector: "DATABRICKS_SERVING_ENDPOINT_ROBOFLOW_DETECTOR",
   llm: "DATABRICKS_SERVING_ENDPOINT_LLM",
+  detector: "DATABRICKS_SERVING_ENDPOINT_DETECTOR",
+  license_plate: "DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE",
+  spill: "DATABRICKS_SERVING_ENDPOINT_SPILL",
+  wet_floor_sign: "DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN",
+  cigarette_vape: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE",
+  slip_fall: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL",
+  fog_detector: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR",
 };
 
 /** TTL (seconds) for cached serving endpoint readiness lookups. */

@@ -17,7 +17,7 @@ import {
 import { callDetector, type Detection } from "../lib/detector";
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "../lib/models";
 import { fetchServingStatus } from "../lib/serving-status";
-import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo } from "../lib/samples";
+import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 
 // Sources the user can feed into the detector. "webcam" is the default; the
 // other entries map onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
@@ -121,12 +121,18 @@ export function LivePage({ isActive }: LivePageProps) {
     };
 
     const attachSample = async (sampleId: string) => {
+      const sample = getSampleVideo(sampleId);
+      if (!sample) {
+        setStatus(`Unknown sample: ${sampleId}`);
+        setStatusKind("error");
+        return;
+      }
       video.srcObject = null;
       trackRef.current = null;
       video.crossOrigin = "anonymous";
       video.loop = true;
       video.muted = true;
-      video.src = `/api/sample-videos/${sampleId}`;
+      video.src = sampleVideoUrl(sample);
       setStatus("Loading sample...");
       setStatusKind("info");
       await video.play().catch(() => undefined);
@@ -356,18 +362,19 @@ export function LivePage({ isActive }: LivePageProps) {
   }, [detections]);
 
   const windowSeconds = Math.round(HISTORY_WINDOW_MS / 1000);
-  // Group by serving alias so the selector reflects the underlying serving
-  // endpoint: one entry for the YOLO endpoint, one bucket for every model
-  // multiplexed through the Roboflow PyFunc dispatcher.
+  // Each detector now lives on its own serving endpoint. Group by purpose
+  // in the selector: the general-purpose YOLO endpoint vs the
+  // single-purpose detectors (license plate, spill, etc.) so users see
+  // the use cases without us hard-coding the alias list.
   const yoloModels = MODELS.filter((m) => m.servingAlias === "detector");
-  const roboflowModels = MODELS.filter((m) => m.servingAlias === "roboflow_detector");
+  const specialtyModels = MODELS.filter((m) => m.servingAlias !== "detector");
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <Card className="lg:col-span-2">
         <CardContent className="space-y-4 pt-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+            <div className="space-y-1.5" data-tour="live-source">
               <Label htmlFor="source">Source</Label>
               <Select
                 value={sourceId}
@@ -398,7 +405,7 @@ export function LivePage({ isActive }: LivePageProps) {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            <div className="space-y-1.5" data-tour="live-detector">
               <Label htmlFor="model">Detector</Label>
               <Select
                 value={modelId}
@@ -421,16 +428,16 @@ export function LivePage({ isActive }: LivePageProps) {
                 <SelectContent>
                   {yoloModels.length > 0 && (
                     <SelectGroup>
-                      <SelectLabel>YOLO endpoint</SelectLabel>
+                      <SelectLabel>General object detector</SelectLabel>
                       {yoloModels.map((m) => (
                         <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                       ))}
                     </SelectGroup>
                   )}
-                  {roboflowModels.length > 0 && (
+                  {specialtyModels.length > 0 && (
                     <SelectGroup>
-                      <SelectLabel>Roboflow multi-model endpoint</SelectLabel>
-                      {roboflowModels.map((m) => (
+                      <SelectLabel>Specialty detectors</SelectLabel>
+                      {specialtyModels.map((m) => (
                         <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
                       ))}
                     </SelectGroup>
@@ -440,7 +447,7 @@ export function LivePage({ isActive }: LivePageProps) {
             </div>
           </div>
 
-          <div className="relative bg-black rounded-lg overflow-hidden aspect-video">
+          <div className="relative bg-black rounded-lg overflow-hidden aspect-video" data-tour="live-video">
             <video
               ref={videoRef}
               autoPlay
@@ -501,7 +508,12 @@ export function LivePage({ isActive }: LivePageProps) {
                 {status || "Initializing camera..."}
               </div>
             </div>
-            <Button onClick={handleSaveSnapshot} disabled={saving} className="gap-2">
+            <Button
+              onClick={handleSaveSnapshot}
+              disabled={saving}
+              className="gap-2"
+              data-tour="live-snapshot"
+            >
               <Save className="w-4 h-4" />
               {saving ? "Saving..." : "Save snapshot"}
             </Button>

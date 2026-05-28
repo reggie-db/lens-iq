@@ -24,7 +24,19 @@ sync:
 
 include:
   - resources/pipeline.yml
-  - resources/app.yml
+  # resources/app.yml deliberately omitted from this bundle round.
+  # The app's serving_endpoint bindings reference the per-detector endpoints
+  # (lensiq-license-plate, lensiq-spill, lensiq-wet-floor-sign,
+  # lensiq-cigarette-vape, lensiq-slip-fall, lensiq-fog-detector) that the
+  # deploy jobs below CREATE. Including the app here when those endpoints
+  # don't yet exist causes terraform apply to fail with
+  # "Endpoint with name '<x>' does not exist". Sequence:
+  #   1. Bundle-deploy with app excluded -> uploads notebooks, registers jobs.
+  #   2. Run lensiq_deploy_fog_detector + lensiq_deploy_roboflow_detectors ->
+  #      creates the six per-detector endpoints.
+  #   3. When the user explicitly asks to redeploy the app, re-include this
+  #      line and run `databricks bundle deploy -t dev` again.
+  # - resources/app.yml
 
 variables:
   catalog:
@@ -39,17 +51,41 @@ variables:
   llm_endpoint:
     description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
     default: databricks-claude-opus-4-7
+  # ─── Serving endpoint names ────────────────────────────────────────────
+  # One endpoint per use case so each detector has its own UC registered
+  # model, scale-to-zero schedule, workload size, and version history.
+  # Naming convention: `lensiq-<model-slug-with-dashes>`. Must stay in sync
+  # with `servingAlias` in client/src/lib/models.ts and the env vars in
+  # app.yaml / .env.
   detector_endpoint:
-    description: Model serving endpoint used for YOLO object detection.
+    description: YOLO general-objects endpoint (custom ultralytics PyFunc).
     default: lensiq-detector
-  roboflow_detector_endpoint:
-    description: Model serving endpoint that hosts the multi-model Roboflow detector PyFunc.
-    default: lensiq-roboflow-detector
+  license_plate_endpoint:
+    description: Roboflow license-plate proxy endpoint.
+    default: lensiq-license-plate
+  spill_endpoint:
+    description: Roboflow spill proxy endpoint.
+    default: lensiq-spill
+  wet_floor_sign_endpoint:
+    description: Roboflow wet-floor-sign proxy endpoint.
+    default: lensiq-wet-floor-sign
+  cigarette_vape_endpoint:
+    description: Roboflow cigarette/vape proxy endpoint.
+    default: lensiq-cigarette-vape
+  slip_fall_endpoint:
+    description: Roboflow slip-and-fall proxy endpoint.
+    default: lensiq-slip-fall
+  fog_detector_endpoint:
+    description: Standalone Pillow+numpy fog / lens-condition classifier.
+    default: lensiq-fog-detector
+
+  # ─── Roboflow secret ──────────────────────────────────────────────────
+  # Same scope/key is shared across all 5 Roboflow proxy endpoints. The key
+  # is injected into each endpoint's ServedEntityInput.environment_vars so
+  # the served PyFunc reads it from os.environ at load time. The app SP
+  # itself never needs the secret.
   roboflow_secret_scope:
-    description: Databricks secret scope holding ROBOFLOW_API_KEY. Read by the
-      lensiq_deploy_roboflow notebook to download Roboflow model weights at
-      deploy time; the weights are then baked into the MLflow artifact, so the
-      app itself never needs the secret.
+    description: Databricks secret scope holding ROBOFLOW_API_KEY.
     default: reggie_pierce
   roboflow_secret_key:
     description: Key inside roboflow_secret_scope that holds the Roboflow API key.
@@ -98,19 +134,84 @@ resources:
               registered_name: lensiq_detector
               endpoint_name: ${var.detector_endpoint}
 
-    lensiq_deploy_roboflow:
-      name: lensiq_deploy_roboflow
+    # Fan-out deploy of the 5 Roboflow proxy endpoints. Each task runs the
+    # same parameterized notebook with a different `model_slug` +
+    # `roboflow_model_id`, producing its own UC registered model and its own
+    # serving endpoint. Re-run an individual task to ship a new version of
+    # just that detector without touching the others.
+    lensiq_deploy_roboflow_detectors:
+      name: lensiq_deploy_roboflow_detectors
       tasks:
-        - task_key: deploy_roboflow
+        - task_key: deploy_license_plate
           notebook_task:
-            notebook_path: ./notebooks/deploy_roboflow_models.ipynb
+            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-              registered_name: lensiq_roboflow_detector
-              endpoint_name: ${var.roboflow_detector_endpoint}
+              model_slug: license_plate
+              model_display_name: License plates
+              roboflow_model_id: roboflow-universe-projects/license-plate-recognition-rxg4e/13
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
+        - task_key: deploy_spill
+          notebook_task:
+            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_slug: spill
+              model_display_name: Spills
+              roboflow_model_id: cv-6rgre/spills-ax5xv/2
+              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_secret: ${var.roboflow_secret_key}
+        - task_key: deploy_wet_floor_sign
+          notebook_task:
+            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_slug: wet_floor_sign
+              model_display_name: Wet floor sign
+              roboflow_model_id: june-2023-wet-floor-sign/wet-floor-sign2/1
+              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_secret: ${var.roboflow_secret_key}
+        - task_key: deploy_cigarette_vape
+          notebook_task:
+            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_slug: cigarette_vape
+              model_display_name: Cigarette / vape
+              roboflow_model_id: takoyati/cigarette-vape-detection/14
+              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_secret: ${var.roboflow_secret_key}
+        - task_key: deploy_slip_fall
+          notebook_task:
+            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              model_slug: slip_fall
+              model_display_name: Slip & fall
+              roboflow_model_id: sensormatic/slip-and-fall/2
+              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_secret: ${var.roboflow_secret_key}
+
+    # Standalone Pillow+numpy classifier. No Roboflow secret, no GPU.
+    # Lives in its own job so it can be redeployed without touching the
+    # Roboflow fleet.
+    lensiq_deploy_fog_detector:
+      name: lensiq_deploy_fog_detector
+      tasks:
+        - task_key: deploy_fog_detector
+          notebook_task:
+            notebook_path: ./notebooks/deploy_fog_detector.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              registered_name: lensiq_fog_detector
+              endpoint_name: ${var.fog_detector_endpoint}
 
     pizza_vision_simulate:
       name: pizza_vision_simulate

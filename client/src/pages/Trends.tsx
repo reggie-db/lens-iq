@@ -18,7 +18,7 @@ export function TrendsPage() {
 
   return (
     <div className="space-y-6">
-      <Card>
+      <Card data-tour="trends-mix">
         <CardHeader>
           <CardTitle>Detection Mix (7 days)</CardTitle>
           <CardDescription>Counts by class with week-over-week trend</CardDescription>

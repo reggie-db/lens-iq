@@ -20,18 +20,53 @@ resources:
           serving_endpoint:
             name: ${var.llm_endpoint}
             permission: CAN_QUERY
+        # One serving endpoint per detector use case. Each maps onto an
+        # AppKit `serving()` alias of the same name in server/server.ts so
+        # routing is "model id -> alias -> endpoint" with no dispatch layer
+        # in the middle. Endpoint names are sourced from databricks.yml.
         - name: detector
           serving_endpoint:
             name: ${var.detector_endpoint}
             permission: CAN_QUERY
-        - name: roboflow_detector
-          # Multi-model Roboflow PyFunc deployed by
-          # notebooks/deploy_roboflow_models.ipynb. Dispatches by `model_id` so
-          # one endpoint covers license plate, spill, wet-floor sign,
-          # cigarette/vape, and slip-and-fall detection.
+        - name: license_plate
           serving_endpoint:
-            name: ${var.roboflow_detector_endpoint}
+            name: ${var.license_plate_endpoint}
             permission: CAN_QUERY
+        - name: spill
+          serving_endpoint:
+            name: ${var.spill_endpoint}
+            permission: CAN_QUERY
+        - name: wet_floor_sign
+          serving_endpoint:
+            name: ${var.wet_floor_sign_endpoint}
+            permission: CAN_QUERY
+        - name: cigarette_vape
+          serving_endpoint:
+            name: ${var.cigarette_vape_endpoint}
+            permission: CAN_QUERY
+        - name: slip_fall
+          serving_endpoint:
+            name: ${var.slip_fall_endpoint}
+            permission: CAN_QUERY
+        - name: fog_detector
+          serving_endpoint:
+            name: ${var.fog_detector_endpoint}
+            permission: CAN_QUERY
+        - name: postgres
+          # Lakebase Autoscaling Postgres backing app-side persistent state
+          # (guest_counts written from the Guests page, fog_observations from
+          # the Camera Health page). Scale-to-zero (min 0.5 CU) so the demo
+          # workspace doesn't burn CU when idle. AppKit's lakebase plugin
+          # uses CAN_CONNECT_AND_CREATE so the app SP can both connect and
+          # auto-create the schema migrations table on first run.
+          #
+          # Resource type is `postgres:` (Lakebase Autoscaling), NOT `database:`
+          # (which is the legacy Lakebase Provisioned shape and was emitting
+          # "unknown field: name" warnings before this fix).
+          postgres:
+            branch: projects/lens-iq/branches/production
+            database: projects/lens-iq/branches/production/databases/db-wb61-xoxc0soijf
+            permission: CAN_CONNECT_AND_CREATE
         # Volume bindings are deliberately omitted here. Granting the app's
         # service principal USE CATALOG requires MANAGE on the parent catalog,
         # which the deploy user often lacks on shared catalogs. Volume paths

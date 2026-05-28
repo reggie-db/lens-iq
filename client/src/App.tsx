@@ -1,8 +1,8 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import {
-  Activity, Bell, Camera, Car, Cpu, Database, LayoutDashboard,
-  Menu, Package, TrendingUp, Upload, Video, Workflow,
+  Activity, Bell, Camera, Car, CloudFog, Cpu, Database, LayoutDashboard,
+  Menu, Package, PlayCircle, TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
   Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
@@ -19,7 +19,10 @@ import { TrendsPage } from "./pages/Trends";
 import { LivePage } from "./pages/Live";
 import { UploadPage } from "./pages/Upload";
 import { PipelinePage } from "./pages/Pipeline";
+import { GuestsPage } from "./pages/Guests";
+import { CameraHealthPage } from "./pages/CameraHealth";
 import { AIChatButton } from "./components/AIChatButton";
+import { TourProvider, useTour } from "./lib/tour";
 import "./lib/queries";
 
 type Role = "Admin" | "Store Manager";
@@ -38,6 +41,8 @@ const VIEW_TITLES: Record<string, string> = {
   live: "Live Stream",
   upload: "Image Upload",
   pipeline: "Continuous Pipeline",
+  guests: "Guest Counts",
+  health: "Camera Health",
 };
 
 interface NavButtonProps {
@@ -82,6 +87,9 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
     <nav className="flex flex-col gap-2">
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Computer Vision</div>
       <NavButton view="live"       label="Live Detection" icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
+      <NavButton view="guests"     label="Guest Counts"   icon={Users}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
+      <NavButton view="health"     label="Camera Health"  icon={CloudFog}       activeView={activeView} onNavigate={handle} />
       <NavButton view="upload"     label="Image Upload"  icon={Upload}          activeView={activeView} onNavigate={handle} />
       <NavButton view="pipeline"   label="Pipeline"      icon={Workflow}        activeView={activeView} onNavigate={handle} />
       <NavButton view="detections" label="Detections"    icon={Camera}          activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
@@ -89,7 +97,6 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">CV-Driven Insights</div>
       <NavButton view="overview"   label="Overview"      icon={LayoutDashboard} activeView={activeView} onNavigate={handle} />
-      <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
       <NavButton view="inventory"  label="Inventory"     icon={Package}         activeView={activeView} onNavigate={handle} />
       <NavButton view="trends"     label="Trends"        icon={TrendingUp}      activeView={activeView} onNavigate={handle} />
 
@@ -102,7 +109,33 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
   );
 }
 
+// Header button that kicks off the guided tour. Lives inside <TourProvider>
+// so it can call useTour().
+function TourLauncher() {
+  const { start } = useTour();
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className="gap-2"
+      onClick={start}
+      title="Walk through the demo with talk-track commentary"
+    >
+      <PlayCircle className="w-4 h-4" />
+      <span className="hidden sm:inline">Tour</span>
+    </Button>
+  );
+}
+
 export default function App() {
+  return (
+    <TourProvider>
+      <AppShell />
+    </TourProvider>
+  );
+}
+
+function AppShell() {
   const location = useLocation();
   const activeView = location.pathname.slice(1) || "live";
 
@@ -162,6 +195,8 @@ export default function App() {
               </div>
 
               <div className="flex items-center gap-4">
+                <TourLauncher />
+
                 <Select value={userRole} onValueChange={(v) => setUserRole(v as Role)}>
                   <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -186,11 +221,13 @@ export default function App() {
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/alerts" element={<AlertsPage />} />
             <Route path="/detections" element={<DetectionsPage />} />
-            <Route path="/plates" element={<PlatesPage />} />
+            <Route path="/plates" element={<PlatesPage isActive={activeView === "plates"} />} />
             <Route path="/search" element={<SearchPage />} />
             <Route path="/inventory" element={<InventoryPage />} />
             <Route path="/trends" element={<TrendsPage />} />
             <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
+            <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
+            <Route path="/health" element={<CameraHealthPage isActive={activeView === "health"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
           </Routes>
