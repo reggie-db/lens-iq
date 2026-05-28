@@ -169,25 +169,14 @@ resources:
               registered_name: lensiq_detector
               endpoint_name: ${var.detector_endpoint}
 
-    # Fan-out deploy of the 5 Roboflow-Universe-backed detector endpoints.
+    # Fan-out deploy of the Roboflow-Universe-backed detector endpoints.
     # Each task runs the same parameterized notebook with a different
-    # `model_slug` + `roboflow_{workspace,project,version}` triple. The
-    # notebook registers a PyFunc that wraps `inference.get_model(...)`
-    # and creates / updates a dedicated UC model + serving endpoint per
-    # detector. On the endpoint's first cold start, the Roboflow Inference
-    # SDK downloads ONNX weights into a writable temp dir; every
-    # subsequent frame is served locally. Re-run an individual task to
-    # ship a new version of just that detector. Per-frame inference does
-    # NOT touch Roboflow.
+    # roboflow_{workspace,project,version} triple. Per-task threshold
+    # rationale lives in docs/detector-calibration.md; the notebook
+    # itself documents the PyFunc / cold-start lifecycle.
     lensiq_deploy_roboflow_detectors:
       name: lensiq_deploy_roboflow_detectors
       tasks:
-        # Triples below are read from the Universe URL:
-        #   https://universe.roboflow.com/<workspace>/<project>/model/<version>
-        # The served PyFunc calls:
-        #   from inference import get_model
-        #   get_model(model_id=f"{project}/{version}", api_key=...)
-        # on cold start. The workspace slug is kept for MLflow tagging only.
         - task_key: deploy_license_plate
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -201,18 +190,8 @@ resources:
               roboflow_version: "5"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
-        # Spill detector. Backed by zan-compute/dial-wet-floor-segmentation,
-        # which catches wet patches on aisle floors but emits noise on
-        # shelves and frame edges. We post-filter inside the PyFunc. The
-        # legit spill signal sits at cf 0.20-0.41 on the candidate aisle
-        # clip with a few borderline frames at exactly 0.20, so we set
-        # min_confidence=0.18 to keep the borderline ones; the noisy
-        # low-conf edge slivers (cf 0.16-0.18 at <1% area) are rejected
-        # by the geometric filters: min_area=2% kills the slivers,
-        # min_y_center=55% rejects shelf-top hallucinations, max_area=20%
-        # caps any future frame-spanning ones. Class label is rewritten
-        # from the upstream "Water-u6Vi" to the endpoint slug "spill" so
-        # the AppKit chart tinting works.
+        # Threshold rationale (per-detector calibration tables, FP analysis,
+        # demo-clip probing) lives in docs/detector-calibration.md.
         - task_key: deploy_spill
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -221,24 +200,17 @@ resources:
               schema: ${var.schema}
               model_slug: spill
               model_display_name: Spills
-              roboflow_workspace: zan-compute
-              roboflow_project: dial-wet-floor-segmentation
-              roboflow_version: "1"
+              roboflow_workspace: universe
+              roboflow_project: spills-ax5xv
+              roboflow_version: "2"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
               class_label_override: spill
-              min_confidence: "0.18"
-              min_area_pct: "2.0"
-              max_area_pct: "20.0"
-              min_y_center_pct: "55.0"
-        # Wet-floor-sign / cone detector. Backed by frc-5881/wet-floor-nhjwl
-        # whose only class is the generic label "sign". Tested clean across
-        # the candidate aisle clip (cone correctly fires at conf 0.83-0.87
-        # only after deployment, no pre-deployment FPs) and unrelated cstore
-        # / forecourt CCTV (0 detections). Filter knobs: min_confidence=0.50
-        # cuts the long tail; max_area=8% kills hallucinated frame-spanning
-        # boxes; min_y_center=40% rejects ceiling/shelf signage; class label
-        # rewritten "sign" -> "wet_floor_sign" to match the endpoint slug.
+              min_confidence: "0.04"
+              min_area_pct: "0.05"
+              max_area_pct: "2.0"
+              min_y_center_pct: "65.0"
+              max_y_center_pct: "95.0"
         - task_key: deploy_wet_floor_sign
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
