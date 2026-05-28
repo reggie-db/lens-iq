@@ -24,19 +24,7 @@ sync:
 
 include:
   - resources/pipeline.yml
-  # resources/app.yml deliberately omitted from this bundle round.
-  # The app's serving_endpoint bindings reference the per-detector endpoints
-  # (lensiq-license-plate, lensiq-spill, lensiq-wet-floor-sign,
-  # lensiq-cigarette-vape, lensiq-slip-fall, lensiq-fog-detector) that the
-  # deploy jobs below CREATE. Including the app here when those endpoints
-  # don't yet exist causes terraform apply to fail with
-  # "Endpoint with name '<x>' does not exist". Sequence:
-  #   1. Bundle-deploy with app excluded -> uploads notebooks, registers jobs.
-  #   2. Run lensiq_deploy_fog_detector + lensiq_deploy_roboflow_detectors ->
-  #      creates the six per-detector endpoints.
-  #   3. When the user explicitly asks to redeploy the app, re-include this
-  #      line and run `databricks bundle deploy -t dev` again.
-  # - resources/app.yml
+  - resources/app.yml
 
 variables:
   catalog:
@@ -142,6 +130,14 @@ resources:
     lensiq_deploy_roboflow_detectors:
       name: lensiq_deploy_roboflow_detectors
       tasks:
+        # IMPORTANT: roboflow_model_id MUST be the 2-segment form
+        # `<project-slug>/<version>` that serverless.roboflow.com expects.
+        # Universe model URLs like
+        # `https://universe.roboflow.com/<workspace>/<project>/model/<version>`
+        # do NOT translate to `<workspace>/<project>/<version>` at the
+        # inference API - the workspace prefix produces a 405 Method Not
+        # Allowed. Each ID below was probed against the workspace API key
+        # (workspace `reggiedb`) and returns 200 with a `predictions` array.
         - task_key: deploy_license_plate
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -150,7 +146,7 @@ resources:
               schema: ${var.schema}
               model_slug: license_plate
               model_display_name: License plates
-              roboflow_model_id: roboflow-universe-projects/license-plate-recognition-rxg4e/13
+              roboflow_model_id: license-plates-f8vsn/5
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_spill
@@ -161,7 +157,7 @@ resources:
               schema: ${var.schema}
               model_slug: spill
               model_display_name: Spills
-              roboflow_model_id: cv-6rgre/spills-ax5xv/2
+              roboflow_model_id: spills-ax5xv/2
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_wet_floor_sign
@@ -172,7 +168,7 @@ resources:
               schema: ${var.schema}
               model_slug: wet_floor_sign
               model_display_name: Wet floor sign
-              roboflow_model_id: june-2023-wet-floor-sign/wet-floor-sign2/1
+              roboflow_model_id: wet-floor-sign2/1
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_cigarette_vape
@@ -183,7 +179,7 @@ resources:
               schema: ${var.schema}
               model_slug: cigarette_vape
               model_display_name: Cigarette / vape
-              roboflow_model_id: takoyati/cigarette-vape-detection/14
+              roboflow_model_id: cigarette-vape-detection-lagrc-4ypjd/3
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_slip_fall
@@ -194,7 +190,7 @@ resources:
               schema: ${var.schema}
               model_slug: slip_fall
               model_display_name: Slip & fall
-              roboflow_model_id: sensormatic/slip-and-fall/2
+              roboflow_model_id: slip-and-fall/1
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
 

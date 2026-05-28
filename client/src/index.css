@@ -1,1 +1,84 @@
 @import "@databricks/appkit-ui/styles.css";
+
+/* Talk-track markdown rendering (/info page). The body HTML comes from
+   marked() and the source lives in docs/dais-talk-track.md - we style the
+   subset of elements that doc uses. */
+.talk-track h1 {
+  font-size: 1.875rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 1.5rem 0 0.75rem;
+  line-height: 1.2;
+}
+.talk-track h2 {
+  font-size: 1.375rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 2rem 0 0.75rem;
+  line-height: 1.3;
+}
+.talk-track h3 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 1.5rem 0 0.5rem;
+}
+.talk-track p {
+  color: #334155;
+  line-height: 1.7;
+  margin: 0.75rem 0;
+}
+.talk-track ul, .talk-track ol {
+  margin: 0.75rem 0;
+  padding-left: 1.5rem;
+  color: #334155;
+}
+.talk-track ul { list-style: disc; }
+.talk-track ol { list-style: decimal; }
+.talk-track li { margin: 0.35rem 0; line-height: 1.6; }
+.talk-track li > p { margin: 0.25rem 0; }
+.talk-track strong { color: #0f172a; font-weight: 600; }
+.talk-track em { font-style: italic; }
+.talk-track blockquote {
+  border-left: 4px solid #dc2626;
+  background: rgba(254, 226, 226, 0.4);
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+  border-radius: 0 0.375rem 0.375rem 0;
+  font-style: italic;
+  color: #1e293b;
+}
+.talk-track blockquote p { color: #1e293b; margin: 0.25rem 0; }
+.talk-track code {
+  background: #f1f5f9;
+  color: #0f172a;
+  padding: 0.125rem 0.375rem;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.talk-track pre {
+  background: #f1f5f9;
+  color: #1e293b;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin: 1rem 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+.talk-track pre code {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+}
+.talk-track hr {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 2rem 0;
+}
+.talk-track a {
+  color: #dc2626;
+  text-decoration: underline;
+}

@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import {
-  Activity, Bell, Camera, Car, CloudFog, Cpu, Database, LayoutDashboard,
+  Activity, Bell, BookOpen, Camera, Car, CloudFog, Cpu, Database, LayoutDashboard,
   Menu, Package, PlayCircle, TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
@@ -21,6 +21,7 @@ import { UploadPage } from "./pages/Upload";
 import { PipelinePage } from "./pages/Pipeline";
 import { GuestsPage } from "./pages/Guests";
 import { CameraHealthPage } from "./pages/CameraHealth";
+import { InfoPage } from "./pages/Info";
 import { AIChatButton } from "./components/AIChatButton";
 import { TourProvider, useTour } from "./lib/tour";
 import "./lib/queries";
@@ -43,6 +44,7 @@ const VIEW_TITLES: Record<string, string> = {
   pipeline: "Continuous Pipeline",
   guests: "Guest Counts",
   health: "Camera Health",
+  info: "Talk Track",
 };
 
 interface NavButtonProps {
@@ -105,6 +107,10 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <NavButton view="alerts"     label="Alerts"        icon={Bell}            activeView={activeView} onNavigate={handle} />
       <NavButton view="devices"    label="All Devices"   icon={Cpu}             activeView={activeView} onNavigate={handle} />
       <NavButton view="search"     label="Data Search"   icon={Database}        activeView={activeView} onNavigate={handle} hidden={restricted("search")} />
+
+      <div className="my-2 border-t border-slate-200" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Reference</div>
+      <NavButton view="info"       label="Talk Track"    icon={BookOpen}        activeView={activeView} onNavigate={handle} />
     </nav>
   );
 }
@@ -230,6 +236,7 @@ function AppShell() {
             <Route path="/health" element={<CameraHealthPage isActive={activeView === "health"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
+            <Route path="/info" element={<InfoPage />} />
           </Routes>
         </div>
 
