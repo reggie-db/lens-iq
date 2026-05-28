@@ -648,9 +648,9 @@ function DetectorPendingOverlay({
     <div className="absolute inset-0 flex items-center justify-center bg-black/45 backdrop-blur-[2px]">
       <div className="flex flex-col items-center gap-3 px-5 py-4 rounded-lg bg-black/70 text-white">
         <Spinner className="size-6" />
-        <div className="text-sm font-medium">Waking detection endpoint</div>
+        <div className="text-sm font-medium">Warming up the camera AI</div>
         <div className="text-xs text-slate-300">
-          Model Serving cold start{stateHint}. Elapsed: {seconds}s
+          First detection in {seconds}s{stateHint}
         </div>
       </div>
     </div>

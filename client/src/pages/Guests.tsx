@@ -217,28 +217,28 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Current total guests</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Guests on premises</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-5xl font-semibold tabular-nums text-slate-900">{currentGuests}</span>
-              <span className="text-sm text-slate-500">people on premises right now</span>
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">{currentGuests}</span>
+              <span className="text-xs text-slate-500">right now</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Cumulative total guests</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Total guests seen</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-5xl font-semibold tabular-nums text-slate-900">{totalGuests}</span>
-              <span className="text-sm text-slate-500">unique people since page load</span>
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">{totalGuests}</span>
+              <span className="text-xs text-slate-500">this session</span>
             </div>
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <ZoneCard label="Pump users" color={COLOR_PUMP_USERS} current={current[METRIC_PUMP_USERS] ?? 0} cumulative={cumulative[METRIC_PUMP_USERS] ?? 0} unit="person" />
         <ZoneCard label="Pump cars"  color={COLOR_PUMP_CARS}  current={current[METRIC_PUMP_CARS] ?? 0}  cumulative={cumulative[METRIC_PUMP_CARS] ?? 0}  unit="vehicle" />
         <ZoneCard label="In-store"   color={COLOR_IN_STORE}   current={current[METRIC_IN_STORE] ?? 0}   cumulative={cumulative[METRIC_IN_STORE] ?? 0}   unit="person" />
@@ -267,17 +267,16 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Activity over time</CardTitle>
+          <CardTitle>Guest traffic over time</CardTitle>
           <CardDescription>
-            Average people / vehicles detected per zone per {CHART_BUCKET_SEC}s bucket, last{" "}
-            {Math.round(CHART_WINDOW_SEC / 60)} min. Streamed from Lakebase Postgres.
+            Average people and vehicles per zone over the last {Math.round(CHART_WINDOW_SEC / 60)} minutes.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <div className="h-64">
             {chartRows.length === 0 ? (
               <div className="h-full flex items-center justify-center text-sm text-slate-500">
-                Waiting for Lakebase to return buckets...
+                Waiting for the first guests to be detected...
               </div>
             ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -303,16 +302,16 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
 function ZoneCard({ label, color, current, cumulative, unit }: { label: string; color: string; current: number; cumulative: number; unit: string }) {
   return (
     <Card>
-      <CardContent className="pt-6 pb-4">
-        <div className="flex items-center justify-between text-xs uppercase tracking-wider text-slate-500 mb-2">
+      <CardContent className="py-3">
+        <div className="flex items-center justify-between text-xs uppercase tracking-wider text-slate-500 mb-0.5">
           <span>{label}</span>
           <span className="inline-block w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
         </div>
         <div className="flex items-baseline gap-2">
-          <span className="text-4xl font-semibold tabular-nums" style={{ color }}>{cumulative}</span>
-          <span className="text-sm text-slate-500">total</span>
+          <span className="text-3xl font-semibold tabular-nums" style={{ color }}>{cumulative}</span>
+          <span className="text-xs text-slate-500">total</span>
         </div>
-        <div className="text-xs text-slate-500 mt-1">
+        <div className="text-xs text-slate-500 mt-0.5">
           {current} {unit}{current === 1 ? "" : "s"} right now
         </div>
       </CardContent>

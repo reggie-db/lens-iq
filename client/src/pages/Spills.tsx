@@ -4,7 +4,7 @@ import {
   Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel,
   SelectTrigger, SelectValue, Slider,
 } from "@databricks/appkit-ui/react";
-import { AlertTriangle, Cone, Droplets, Loader2, RotateCcw } from "lucide-react";
+import { AlertTriangle, Cone, Droplets, Loader2 } from "lucide-react";
 import {
   captureVideoFrameForDetection,
   scaleDetectionBbox,
@@ -32,16 +32,13 @@ import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 // Completed cycles (both spill + cone seen) get POSTed to /api/spill-cycles
 // for persistence; the summary endpoint feeds "last / avg / fastest" cards.
 //
-// The "Place cone" button seeks the video forward to 0:27, where the real
-// cone appears in the clip - useful for demoing how fast CV picks up the
-// operator's response. Scrubbing the slider has the same effect: jump past
-// the spill, see the cone, get a fast response_ms.
+// Scrubbing the slider seeks past the spill so the operator-response cone
+// is visible, which gives a fast response_ms for the demo.
 
 const FEED_FPS = 1.5;
 const RECENT_REFRESH_MS = 5_000;
 const SUMMARY_REFRESH_MS = 5_000;
 const RECENT_LIMIT = 25;
-const CONE_TIMESTAMP_SEC = 27;
 
 // Per-detector confidence thresholds passed to /api/detect. The spill
 // PyFunc's post-filter is min_confidence=0.18 and the real signal on the
@@ -166,13 +163,13 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Current response</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Current response</div>
             <div className="flex items-baseline gap-2">
               <span
-                className="text-4xl font-semibold tabular-nums"
+                className="text-3xl font-semibold tabular-nums"
                 style={{ color: cycle.responseMs != null ? COLOR_CONE : cycle.spillFirstTs != null ? COLOR_SPILL : "#0f172a" }}
               >
                 {cycle.responseMs != null
@@ -181,46 +178,46 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
                   ? _formatMs(cycle.liveElapsedMs)
                   : "-"}
               </span>
-              <span className="text-sm text-slate-500">
+              <span className="text-xs text-slate-500">
                 {cycle.responseMs != null
                   ? "spill to cone"
                   : cycle.spillFirstTs != null
-                  ? "elapsed, waiting for cone"
+                  ? "waiting for cone"
                   : "no spill yet"}
               </span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Last cycle</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Last cycle</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums text-slate-900">
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">
                 {summary.last_response_ms != null ? _formatMs(summary.last_response_ms) : "-"}
               </span>
-              <span className="text-sm text-slate-500">from Lakebase</span>
+              <span className="text-xs text-slate-500">most recent</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Avg response (last 50)</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Avg response</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums" style={{ color: COLOR_NEUTRAL }}>
+              <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_NEUTRAL }}>
                 {summary.avg_response_ms != null ? _formatMs(summary.avg_response_ms) : "-"}
               </span>
-              <span className="text-sm text-slate-500">across {summary.cycles} cycle{summary.cycles === 1 ? "" : "s"}</span>
+              <span className="text-xs text-slate-500">last {summary.cycles} cycle{summary.cycles === 1 ? "" : "s"}</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Fastest response</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Fastest response</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums" style={{ color: COLOR_CONE }}>
+              <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_CONE }}>
                 {summary.min_response_ms != null ? _formatMs(summary.min_response_ms) : "-"}
               </span>
-              <span className="text-sm text-slate-500">best in window</span>
+              <span className="text-xs text-slate-500">best so far</span>
             </div>
           </CardContent>
         </Card>
@@ -240,15 +237,15 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Recent cycles</CardTitle>
+            <CardTitle className="text-base">Recent spill responses</CardTitle>
             <CardDescription>
-              Latest spill {"->"} cone response times from Lakebase, refreshed every {Math.round(RECENT_REFRESH_MS / 1000)}s.
+              Time from spill to cone, newest at the top.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-[460px] overflow-y-auto">
               {recent.length === 0 ? (
-                <div className="text-sm text-slate-500">No cycles recorded yet. Wait for a spill + cone to be detected, or click "Place cone".</div>
+                <div className="text-sm text-slate-500">No cycles recorded yet. Wait for a spill and cone to be detected.</div>
               ) : (
                 recent.map((r) => (
                   <div key={r.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-slate-50">

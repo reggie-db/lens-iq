@@ -233,31 +233,31 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Plates read (session)</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Plates read</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums text-slate-900">{sessionStats.reads}</span>
-              <span className="text-sm text-slate-500">successful OCR calls</span>
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">{sessionStats.reads}</span>
+              <span className="text-xs text-slate-500">this session</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Unique plates</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Unique plates</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums text-slate-900">{sessionStats.unique}</span>
-              <span className="text-sm text-slate-500">distinct readings</span>
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">{sessionStats.unique}</span>
+              <span className="text-xs text-slate-500">this session</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Vehicles tracked now</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Vehicles on camera</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-4xl font-semibold tabular-nums" style={{ color: COLOR_VEHICLE }}>{vehicleTracks.length}</span>
-              <span className="text-sm text-slate-500">in current frame</span>
+              <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_VEHICLE }}>{vehicleTracks.length}</span>
+              <span className="text-xs text-slate-500">right now</span>
             </div>
           </CardContent>
         </Card>
@@ -295,11 +295,10 @@ function RecentPlatesCard({ plates }: RecentPlatesCardProps) {
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <ZoomIn className="w-4 h-4" />
-          Recent reads
+          Recent license plate detections
         </CardTitle>
         <CardDescription>
-          Plate crops the OCR pipeline saw, persisted to Lakebase Postgres
-          along with the text.
+          Newest at the top. Updates live as cars arrive.
         </CardDescription>
       </CardHeader>
       <CardContent className="p-0">
@@ -581,7 +580,7 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
             style={{ borderColor: COLOR_VEHICLE, color: COLOR_VEHICLE }}
           >
             <ScanLine className="w-3 h-3" />
-            License plate OCR
+            Reading license plates
           </Badge>
         </div>
         <div className="text-xs text-slate-500 flex items-center gap-1.5">

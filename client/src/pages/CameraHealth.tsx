@@ -274,41 +274,38 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
 
   return (
     <div className="space-y-6">
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Cameras monitored</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Cameras monitored</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-5xl font-semibold tabular-nums text-slate-900">2</span>
-              <span className="text-sm text-slate-500">streams running fog_detector</span>
+              <span className="text-3xl font-semibold tabular-nums text-slate-900">2</span>
+              <span className="text-xs text-slate-500">checking lens clarity</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Cameras fogged now</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Cameras fogged now</div>
             <div className="flex items-baseline gap-2">
               <span
-                className="text-5xl font-semibold tabular-nums"
+                className="text-3xl font-semibold tabular-nums"
                 style={{ color: camerasFoggedNow > 0 ? COLOR_FOG : COLOR_OK }}
               >
                 {camerasFoggedNow}
               </span>
-              <span className="text-sm text-slate-500">of 2 right now</span>
+              <span className="text-xs text-slate-500">of 2 right now</span>
             </div>
           </CardContent>
         </Card>
         <Card>
-          <CardContent className="pt-6 pb-4">
-            <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">Cleaning tickets opened</div>
+          <CardContent className="py-3">
+            <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Cleaning tickets opened</div>
             <div className="flex items-baseline gap-2">
-              <span className="text-5xl font-semibold tabular-nums" style={{ color: COLOR_SECONDARY_LINE }}>
+              <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_SECONDARY_LINE }}>
                 {totalIncidents}
               </span>
-              <span className="text-sm text-slate-500">since page load</span>
-            </div>
-            <div className="text-xs text-slate-500 mt-1">
-              One per sustained fog event (&ge; {INCIDENT_TICK_THRESHOLD} ticks).
+              <span className="text-xs text-slate-500">this session</span>
             </div>
           </CardContent>
         </Card>
@@ -336,17 +333,16 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <Card className="lg:col-span-2">
           <CardHeader>
-            <CardTitle>Fog coverage over time</CardTitle>
+            <CardTitle>Lens clarity over time</CardTitle>
             <CardDescription>
-              Average % of frame flagged as fogged per camera, {CHART_BUCKET_SEC}s buckets,
-              last {Math.round(CHART_WINDOW_SEC / 60)} min. Streamed from Lakebase Postgres.
+              Percent of the frame fogged per camera over the last {Math.round(CHART_WINDOW_SEC / 60)} minutes.
             </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="h-64">
               {chartRows.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-sm text-slate-500">
-                  Waiting for Lakebase to return buckets...
+                  Waiting for the first lens-clarity reading...
                 </div>
               ) : (
                 <ResponsiveContainer width="100%" height="100%">
@@ -393,8 +389,8 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
 
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Recent fog events</CardTitle>
-            <CardDescription>Latest fogged observations from Lakebase, refreshed every {Math.round(INCIDENTS_REFRESH_MS / 1000)}s.</CardDescription>
+            <CardTitle className="text-base">Recent cleaning tickets</CardTitle>
+            <CardDescription>Sustained fog events, newest at the top.</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-2 max-h-[300px] overflow-y-auto">
