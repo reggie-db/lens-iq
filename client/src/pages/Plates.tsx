@@ -232,7 +232,7 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
   }, [sessionReads]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card>
           <CardContent className="py-3">
@@ -263,7 +263,7 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <PlateFeed
             isActive={isActive}
@@ -482,7 +482,7 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
 
         tracksRef.current = tracksRef.current.filter((t) => tickIdx - t.lastSeenTick <= TRACK_TTL_TICKS);
         onTracksChange([...tracksRef.current]);
-        setStatus(vehicles.length > 0 ? `${vehicles.length} vehicle(s) in frame${newTracks.length > 0 ? ` - OCRing ${newTracks.length} new` : ""}` : "Watching for vehicles...");
+        setStatus(vehicles.length > 0 ? `${vehicles.length} vehicle(s) in frame${newTracks.length > 0 ? ` - reading ${newTracks.length} new plate(s)` : ""}` : "Watching for vehicles...");
       } catch (err) {
         setStatus(err instanceof Error ? err.message : String(err));
       } finally {
@@ -584,7 +584,7 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
           </Badge>
         </div>
         <div className="text-xs text-slate-500 flex items-center gap-1.5">
-          {status.includes("reading") || status.includes("OCRing") ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+          {status.includes("reading") ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
           {status || "Initializing..."}
         </div>
       </CardContent>

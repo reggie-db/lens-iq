@@ -9,17 +9,17 @@
 // refresh (Cmd+R) is enough to pick up an updated deck - no in-app
 // refresh button needed.
 //
-// Layout note: the AppShell wraps every route in an `px-4 md:px-8 py-6`
+// Layout note: the AppShell wraps every route in an `px-4 md:px-8 py-4`
 // container so the dense data pages have breathing room. The booth deck
-// is the opposite — it should fill the entire content column so slides
+// is the opposite, it should fill the entire content column so slides
 // are legible from across the booth. We break out of the parent padding
 // with negative margins and then size the iframe to the dynamic
-// viewport height minus the sticky app header (~73px).
-const HEADER_HEIGHT_PX = 73;
+// viewport height minus the sticky app header (~65px).
+const HEADER_HEIGHT_PX = 65;
 
 export function DeckPage() {
   return (
-    <div className="-mx-4 md:-mx-8 -my-6">
+    <div className="-mx-4 md:-mx-8 -my-4">
       <iframe
         src="/api/presenter-content/booth-deck"
         title="LensIQ booth deck"

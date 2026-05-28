@@ -133,7 +133,7 @@ export function DetectionsPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2"><Camera className="w-5 h-5" /> Recent Detections</CardTitle>
-            <CardDescription>Latest from the warehouse</CardDescription>
+            <CardDescription>Latest events across the store</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="space-y-3 max-h-[500px] overflow-y-auto">
@@ -164,7 +164,7 @@ export function DetectionsPage() {
             Live Detection Stream
           </CardTitle>
           <CardDescription>
-            Streaming new detections from /api/detections/stream
+            New detections appear as they happen, newest first.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -179,8 +179,7 @@ export function DetectionsPage() {
                     <Badge variant="outline">{Math.round(e.confidence * 100)}%</Badge>
                   </div>
                   <div className="mt-1 text-xs text-slate-500">{e.ts}</div>
-                  <div className="mt-1 text-xs text-slate-500">store: {e.store_id}</div>
-                  <div className="mt-1 text-xs font-mono text-slate-400">frame: {e.frame_id}</div>
+                  <div className="mt-1 text-xs text-slate-500">Store {e.store_id}</div>
                 </div>
               ))}
             </div>

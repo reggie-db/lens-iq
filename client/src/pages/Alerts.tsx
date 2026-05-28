@@ -38,7 +38,7 @@ export function AlertsPage() {
       <Card className="lg:col-span-2">
         <CardHeader>
           <CardTitle className="flex items-center gap-2"><Bell className="w-5 h-5" /> Recent Alerts</CardTitle>
-          <CardDescription>Last 50 rule-engine events</CardDescription>
+          <CardDescription>The 50 most recent operator alerts</CardDescription>
         </CardHeader>
         <CardContent>
           {loading && <Skeleton className="h-64 w-full" />}
@@ -73,7 +73,7 @@ export function AlertsPage() {
       <Card>
         <CardHeader>
           <CardTitle>Active Rules</CardTitle>
-          <CardDescription>Static configuration</CardDescription>
+          <CardDescription>What we alert on, and how</CardDescription>
         </CardHeader>
         <CardContent>
           <ul className="space-y-2 text-sm">

@@ -273,7 +273,7 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card>
           <CardContent className="py-3">
@@ -311,7 +311,7 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" data-tour="health-feeds">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4" data-tour="health-feeds">
         <FogFeed
           isActive={isActive}
           config={primaryConfig}
@@ -330,7 +330,7 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle>Lens clarity over time</CardTitle>

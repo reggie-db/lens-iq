@@ -81,9 +81,8 @@ export function UploadPage() {
             <UploadIcon className="w-5 h-5" /> Image Upload
           </CardTitle>
           <CardDescription>
-            Runs a single image through the YOLO detector. The frame is uploaded
-            to the `frames` UC volume and each detection becomes a row in the
-            detections table, so it shows up in the Detections page and warehouse charts.
+            Upload a still image to see what the camera AI would detect.
+            Each finding shows up on the Detections page and rolls into the daily charts.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">

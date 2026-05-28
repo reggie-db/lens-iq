@@ -168,9 +168,9 @@ function PipelinePageInner() {
           <Workflow className="w-5 h-5" /> Continuous detection pipeline
         </h2>
         <p className="text-sm text-slate-600">
-          Raw frames stream in from <code>frames_inbox</code>, get deduped to
-          one per 10s per camera, then run through the YOLO serving endpoint.
-          New frames appear here within {(REFRESH_MS / 1000).toFixed(0)}s.
+          Frames stream in from the cameras, get filtered to one every 10s per
+          camera, then run through the detection model. New frames appear here
+          within {(REFRESH_MS / 1000).toFixed(0)}s.
         </p>
       </div>
 

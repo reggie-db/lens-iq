@@ -203,7 +203,7 @@ function AppShell() {
 
       <div className="flex-1 flex flex-col min-w-0">
         <header className="bg-white border-slate-200 border-b">
-          <div className="px-4 md:px-8 py-4">
+          <div className="px-4 md:px-8 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
@@ -294,7 +294,7 @@ function AppShell() {
           </div>
         </header>
 
-        <div className="flex-1 px-4 md:px-8 py-6 overflow-auto">
+        <div className="flex-1 px-4 md:px-8 py-4 overflow-auto">
           <Routes>
             <Route path="/" element={<Navigate to="/live" replace />} />
             <Route path="/overview" element={<OverviewPage />} />

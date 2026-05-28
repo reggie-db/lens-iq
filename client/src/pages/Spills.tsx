@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle,
+  Badge, Card, CardContent, CardDescription, CardHeader, CardTitle,
   Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel,
   SelectTrigger, SelectValue, Slider,
 } from "@databricks/appkit-ui/react";
@@ -162,7 +162,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
   }, [loadSummary, loadRecent]);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
         <Card>
           <CardContent className="py-3">
@@ -223,7 +223,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
           <SpillFeed
             isActive={isActive}
@@ -290,8 +290,7 @@ interface OverlayDetection extends Detection {
 // Single CCTV feed that runs spill + wet_floor_sign in parallel each tick.
 // Tracks the wall-clock delta between the first spill detection and the
 // first cone detection of the current cycle, persists complete cycles to
-// Lakebase, and lets the user scrub the video or jump straight to the
-// cone-deployment moment.
+// Lakebase, and lets the user scrub the video to jump past the spill.
 function SpillFeed({
   isActive, sourceId, candidates, onSourceChange, onCycleUpdate, onCycleComplete,
 }: SpillFeedProps) {
@@ -525,22 +524,6 @@ function SpillFeed({
     void video.play().catch(() => undefined);
   }, []);
 
-  const handlePlaceCone = useCallback(() => {
-    seekTo(CONE_TIMESTAMP_SEC);
-  }, [seekTo]);
-
-  const handleReset = useCallback(() => {
-    const video = videoRef.current;
-    resetCycle();
-    setDetections([]);
-    if (video) {
-      video.currentTime = 0;
-      lastVideoTimeRef.current = 0;
-      setVideoTime(0);
-      void video.play().catch(() => undefined);
-    }
-  }, [resetCycle]);
-
   const handleScrub = useCallback(
     (values: number[]) => {
       const next = values[0];
@@ -628,19 +611,9 @@ function SpillFeed({
           />
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={handlePlaceCone} className="gap-2" style={{ backgroundColor: COLOR_CONE, borderColor: COLOR_CONE }}>
-            <Cone className="w-4 h-4" />
-            Place cone (jump to 0:{String(CONE_TIMESTAMP_SEC).padStart(2, "0")})
-          </Button>
-          <Button onClick={handleReset} variant="outline" className="gap-2">
-            <RotateCcw className="w-4 h-4" />
-            Reset cycle
-          </Button>
-          <div className="text-xs text-slate-500 flex items-center gap-1.5 ml-auto">
-            {status === "Loading clip..." ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-            {status || "Initializing..."}
-          </div>
+        <div className="flex items-center gap-1.5 text-xs text-slate-500 justify-end">
+          {status === "Loading clip..." ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+          {status || "Initializing..."}
         </div>
 
         {errorMessage && (

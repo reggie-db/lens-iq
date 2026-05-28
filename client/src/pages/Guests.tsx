@@ -216,7 +216,7 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
   const totalGuests = (cumulative[METRIC_PUMP_USERS] ?? 0) + (cumulative[METRIC_IN_STORE] ?? 0);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <Card>
           <CardContent className="py-3">
@@ -244,7 +244,7 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
         <ZoneCard label="In-store"   color={COLOR_IN_STORE}   current={current[METRIC_IN_STORE] ?? 0}   cumulative={cumulative[METRIC_IN_STORE] ?? 0}   unit="person" />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <GuestFeed
           isActive={isActive}
           zoneLabel="Forecourt"
