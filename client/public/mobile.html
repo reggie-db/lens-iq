@@ -7,7 +7,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <meta name="theme-color" content="#000000" />
+  <meta name="theme-color" content="#1B3139" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
   <title>LensIQ Mobile</title>
   <style>
     * {
@@ -22,7 +23,7 @@
       position: fixed;
       inset: 0;
       background: #000;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: "DM Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     }
     /* Hide controls overlay when in immersive mode */
     body.immersive .ui-overlay {
@@ -45,10 +46,31 @@
   </style>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
+    // LensIQ brand palette - keep in sync with client/public/brand-kit.html.
+    // brand     = Lava 600 (primary pop)
+    // brandDark = Lava 700 (hover/active)
+    // brandNavy = Navy 800 (deep ground)
     tailwind.config = {
-      theme: { extend: { colors: { brand: '#dc2626', brandDark: '#b91c1c' } } }
+      theme: {
+        extend: {
+          colors: {
+            brand: '#FF3621',
+            brandDark: '#BD2B26',
+            brandNavy: '#1B3139',
+          },
+          fontFamily: {
+            sans: ['"DM Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
     };
   </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap"
+    rel="stylesheet"
+  />
 </head>
 
 <body class="h-full w-full overflow-hidden text-white">
@@ -61,12 +83,23 @@
     <canvas id="canvas"
       class="absolute inset-0 w-full h-full object-contain pointer-events-none"></canvas>
 
-    <!-- Top-left model badge -->
+    <!-- Top-left model badge. The aperture sits in the icon slot; the
+         #badgeDot retains its element id so existing JS that recolors it on
+         model change keeps working. We swap the dot for a span overlay
+         tinted via background. -->
     <div class="ui-overlay absolute top-3 left-3">
       <div id="badge"
-        class="px-2.5 py-1 rounded-md bg-white/85 text-slate-900 text-xs font-medium backdrop-blur flex items-center gap-1.5">
-        <span id="badgeDot" class="inline-block w-2 h-2 rounded-full bg-brand"></span>
-        <span id="badgeText">LensIQ</span>
+        class="px-2.5 py-1 rounded-md bg-white/90 text-slate-900 text-xs font-medium backdrop-blur flex items-center gap-2">
+        <svg width="14" height="14" viewBox="0 0 256 256" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M255.82,134.70 A128,128 0 0 1 197.71,235.35 L132.84,167.38 L159.69,151.88 Z" fill="#FF9E94"/>
+          <path d="M186.11,242.05 A128,128 0 0 1 69.89,242.05 L96.31,151.88 L123.16,167.38 Z" fill="#FF7A66"/>
+          <path d="M58.29,235.35 A128,128 0 0 1 0.18,134.70 L91.47,112.50 L91.47,143.50 Z" fill="#FF5F46"/>
+          <path d="M0.18,121.30 A128,128 0 0 1 58.29,20.65 L123.16,88.62 L96.31,104.12 Z" fill="#FF3621"/>
+          <path d="M69.89,13.95 A128,128 0 0 1 186.11,13.95 L159.69,104.12 L132.84,88.62 Z" fill="#E12D1C"/>
+          <path d="M197.71,20.65 A128,128 0 0 1 255.82,121.30 L164.53,143.50 L164.53,112.50 Z" fill="#BD2B26"/>
+        </svg>
+        <span id="badgeDot" class="inline-block w-1.5 h-1.5 rounded-full bg-brand"></span>
+        <span id="badgeText" style="letter-spacing:-0.01em">LensIQ</span>
       </div>
     </div>
 
@@ -183,7 +216,7 @@
     const setStatus = (msg) => { statusEl.textContent = msg || ""; };
     const setBadge = (model) => {
       badgeText.textContent = model?.name || "LensIQ";
-      badgeDot.style.backgroundColor = model?.color || "#dc2626";
+      badgeDot.style.backgroundColor = model?.color || "#FF3621";
     };
 
     function pruneHistory() {
@@ -419,7 +452,7 @@
     // === Bounding-box rendering ===
     function _hexToRgba(hex, alpha) {
       const m = String(hex || "").match(/^#?([0-9a-fA-F]{6})$/);
-      if (!m) return `rgba(220, 38, 38, ${alpha})`;
+      if (!m) return `rgba(255, 54, 33, ${alpha})`;
       const n = parseInt(m[1], 16);
       return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
     }
@@ -427,7 +460,7 @@
     function drawDetections() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (!detections.length) return;
-      const color = currentModel?.color || "#dc2626";
+      const color = currentModel?.color || "#FF3621";
       const fill = _hexToRgba(color, 0.9);
       ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
       ctx.font = `${Math.max(14, Math.round(canvas.width / 60))}px sans-serif`;

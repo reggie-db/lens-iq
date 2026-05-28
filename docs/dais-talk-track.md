@@ -79,15 +79,26 @@ What to do:
 2. Point at the rows streaming in from the camera demo you just did.
 
 What to say:
-> "What you just saw on the video isn't a screenshot. It's a row in the
-> lake. The moment the camera saw it, it landed in Unity Catalog - the same
-> place your finance, supply chain, and HR data live. That means your loss
-> prevention team, your dashboards, your AI agents, and your operations app
-> are all looking at the *same* event with the *same* governance."
+> "What you just saw on the video isn't a screenshot. It's a row in a
+> **Delta** table. The frame itself, the detection, the model version that
+> produced it - all of it lands in Unity Catalog with ACID guarantees, the
+> same place your finance, supply chain, and HR data live. Thousands of
+> cameras can be writing at once, your enrichment pipeline can be reading
+> the same table, and nobody steps on anyone's toes."
+
+> "Then the gold layer of that pipeline writes into **Lakebase Postgres** -
+> the operational database this app reads and writes back to. That's why
+> the supervisor's tap-to-acknowledge is millisecond-fast even at scale,
+> and why the same incident row is queryable in Postgres *and* in the lake
+> for tomorrow's report."
 
 Why this matters to the buyer:
 - They were going to buy a separate computer-vision system that wrote to
   its own database. Now there isn't one. There's just the lake.
+- **Delta** handles the ingest and pipeline math: every frame, every
+  enrichment, every model version - ACID, time-travel, auditable.
+- **Lakebase** handles the operator path: Postgres-fast read/write at
+  scale, synced back to Delta so analytics never goes stale.
 - Audit, retention, redaction, and PII rules they already wrote for the
   rest of the business apply to footage too.
 
@@ -107,22 +118,71 @@ Why this matters to the buyer:
 - They have asked their data team for "one number" for years. Footage
   finally rolls up into the same number everyone else is using.
 
+### Stop 4: Talk to the data with Genie
+
+What to do:
+1. Open the Genie panel (or the AI chat button in the corner).
+2. Ask one question in plain English. Examples that always land:
+   - *"Which stores had the most spills this week?"*
+   - *"What was the average time-to-cone yesterday, by shift?"*
+   - *"Show me unique license plates that visited more than three of our
+     locations this month."*
+
+What to say:
+> "Once your footage is rows in Delta, your analysts don't have to learn a
+> new tool to use it. **Genie** is a natural-language interface over the
+> exact same tables you saw on Detections and Trends. The CFO can ask the
+> question they were going to email the data team. The regional VP can
+> compare stores without opening a BI tool. Your loss prevention lead can
+> pull a list of repeat plate offenders without writing SQL. Every
+> detection the camera produced is a number an analyst can talk to."
+
+Why this matters to the buyer:
+- The biggest cost of a CV system isn't the cameras or the models - it's
+  the data team translating questions into SQL for everyone else. Genie
+  removes that translator.
+- Genie reads the same Unity Catalog governance you've already configured
+  - row-level security, column masks, audit log. Analysts get the data
+  they're allowed to see, not more.
+- The same Delta tables also power your existing AI/BI dashboards and the
+  agents your data team is building. Nothing forks.
+
 ---
 
-## Section 3 - TELL: the unlock is zerobus + one workspace
+## Section 3 - TELL: the unlock is zerobus, Delta, and Lakebase
 
 This is the recap. Spend 60 seconds here. Don't pivot back to features.
+Three pieces, in the order data flows.
 
-> "What changed is two things. First, the ingest. **Zerobus** lets a camera,
-> a mobile app, or any edge device write directly into Unity Catalog -
-> sub-second, governed, no message broker in between. The same channel
-> we're using to stream detections here is the one our mobile teams are
-> moving onto next. If a guest taps a button in your app, that event lands
-> in the same governed table as the camera saw it. One channel for every
-> signal."
+> "First, the **ingest**. **Zerobus** lets a camera, a mobile app, or any
+> edge device write directly into Unity Catalog - sub-second, governed, no
+> message broker in between. The same channel we're using to stream
+> detections here is the one our mobile teams are moving onto next. If a
+> guest taps a button in your app, that event lands in the same governed
+> table as the camera saw it. One channel for every signal."
 
-> "Second, the workspace. Models, lake, app, and write-back are one bundle,
-> one bill, one security boundary. That used to be a six-month
+> "Second, the **storage**. Every frame, every detection, every pipeline
+> transformation is a **Delta** table - ACID transactions, time-travel,
+> schema enforcement. That's what makes it safe for thousands of cameras
+> to write while a serverless pipeline is enriching and a dashboard is
+> reading. You don't need a separate analytics database; the lake is the
+> database."
+
+> "Third, the **operator layer**. The gold output of that pipeline lands in
+> **Lakebase Postgres** - autoscaling, Postgres-flavored OLTP that the app
+> reads and writes back to. That's how you get millisecond
+> tap-to-acknowledge on the floor *and* the same incident row available in
+> the lake for tomorrow's executive report. Operational and analytical on
+> one surface."
+
+> "And once it's all in Delta, **Genie** lets your analysts *talk* to the
+> data in plain English. The CFO doesn't file a ticket with the data team
+> to ask 'which stores had the most spills this week' - they just ask.
+> Every detection your camera produced is a question your business is
+> already trying to answer."
+
+> "All of it - models, lake, Postgres, app, Genie - is one bundle, one
+> bill, one security boundary. That used to be a six-month
 > system-integration project with three vendors. Today it's an afternoon."
 
 The slogan to leave them with:
@@ -212,9 +272,24 @@ platform.
 
 **"What does it cost to run?"**
 Three line items, all elastic: model serving, the operational write-back
-database (Lakebase), and storage for whichever frames you choose to keep.
-Models and database scale to zero between events. Most customers persist
-only the frames around an alert, so storage is small.
+database (Lakebase Postgres), and Delta storage for whichever frames you
+choose to keep. Models and the database scale to zero between events.
+Most customers persist only the frames around an alert, so storage is
+small. Delta's time-travel and Z-ordering keep the working set tight even
+when you do persist everything.
+
+**"What happens when a thousand cameras write at once?"**
+Delta handles concurrent writes by design - the lake is the buffer.
+Zerobus ACKs each record as it lands. Your enrichment pipeline reads from
+the same Delta table without blocking, and the gold layer flows into
+Lakebase Postgres for the operator app. Each tier scales independently.
+
+**"Why Postgres in the middle - isn't the lake enough?"**
+For the things an operator does in the moment - opening an incident,
+acknowledging a spill, updating a status - you want millisecond UPDATEs,
+not append-only Delta writes. Lakebase gives you that *and* keeps the
+data synced back to Unity Catalog automatically, so analytics is never
+out of date. Same governance surface, two access patterns.
 
 **"What about privacy - faces and plates?"**
 Same governance surface as the rest of your data. Blur at the edge, or
@@ -246,26 +321,40 @@ number to the CFO, not to prove the tech works.
 ## Appendix - one-line architecture (for the SA)
 
 ```
-Cameras / mobile / edge -- Zerobus -->  Unity Catalog (detections, frames)
+Cameras / mobile / edge -- Zerobus -->  Delta bronze in Unity Catalog
+                                        (frames, raw detections)
                                               |
-                                  Model Serving (one endpoint per use case)
+                              Spark Declarative Pipeline (serverless)
+                              bronze -> silver -> gold, all Delta
                                               |
-                                Databricks App (LensIQ - live + write-back)
+                          +-------------------+-------------------+
+                          |                                       |
+                Model Serving                              Lakebase Postgres
+                (one endpoint per                          (operator state:
+                 use case, scale                            incidents, ACKs,
+                 to zero)                                   write-back)
+                          |                                       |
+                          +-------------------+-------------------+
                                               |
-                                  Lakebase Postgres (operator state)
+                                Databricks App (LensIQ UI -
+                                live, alerts, swimlane,
+                                composable with Genie + AI/BI)
                                               |
-                              Synced back to UC for analytics, Genie, agents
+                              Lakebase synced tables back to Delta
+                              -> analytics, Genie, agents always fresh
 ```
 
-One bundle. One workspace. One bill.
+One bundle. One workspace. One bill. Delta is the durable spine, Lakebase
+is the operator path, Zerobus is the on-ramp.
 
 ---
 
 ## Notes for the presenter
 
-- **Time budget.** Three minutes on Section 1, four on Section 2, one on
-  Section 3, two on Sections 4-5. The 5-minute version cuts Section 4 to
-  one vertical and skips Q&A.
+- **Time budget.** Three minutes on Section 1, four on Section 2 (one per
+  stop, Genie last), one on Section 3, two on Sections 4-5. The 5-minute
+  version cuts Section 4 to one vertical and skips Q&A. If you only have
+  three minutes, do Stop 1 (Live), Stop 4 (Genie), and the close.
 - **Don't open the IDE.** This is a business demo, not a code review. The
   appendix and the deeper architecture are for the SA standing behind you.
 - **No customer logos.** This demo is generic so it can be reused.

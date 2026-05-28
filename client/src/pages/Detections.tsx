@@ -3,6 +3,7 @@ import { useAnalyticsQuery } from "@databricks/appkit-ui/react";
 import { sql } from "@databricks/appkit-ui/js";
 import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, Skeleton } from "@databricks/appkit-ui/react";
 import { Camera, Car, Package, Pizza, TrendingUp, Truck, Users } from "lucide-react";
+import { loadingBar } from "../components/GlobalLoadingBar";
 import {
   Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
@@ -46,9 +47,23 @@ export function DetectionsPage() {
   // SSE subscription is always on: the page mounts -> open EventSource,
   // unmount -> close. /api/detections/stream is backed by the analytics
   // plugin polling the detections table every POLL_INTERVAL_MS.
+  //
+  // EventSource bypasses the patched window.fetch we use to drive the global
+  // top-of-page loading bar, so we mark the connect handshake manually:
+  // start() on mount, done() on first event or on error/close.
   useEffect(() => {
+    loadingBar.start();
+    let opened = false;
+    const finish = (): void => {
+      if (opened) return;
+      opened = true;
+      loadingBar.done();
+    };
     const evt = new EventSource("/api/detections/stream");
+    evt.addEventListener("open", finish);
+    evt.addEventListener("error", finish);
     evt.addEventListener("detection", (e) => {
+      finish();
       try {
         const payload = JSON.parse((e as MessageEvent).data) as StreamEvent;
         setStreamEvents((prev) => [payload, ...prev].slice(0, MAX_STREAM_EVENTS));
@@ -56,7 +71,10 @@ export function DetectionsPage() {
         // Swallow malformed payloads; the stream is best-effort.
       }
     });
-    return () => evt.close();
+    return () => {
+      finish();
+      evt.close();
+    };
   }, []);
 
   if (summaryLoading && !summary) {

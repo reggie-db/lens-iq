@@ -23,6 +23,8 @@ import { GuestsPage } from "./pages/Guests";
 import { CameraHealthPage } from "./pages/CameraHealth";
 import { InfoPage } from "./pages/Info";
 import { AIChatButton } from "./components/AIChatButton";
+import { GlobalLoadingBar } from "./components/GlobalLoadingBar";
+import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
 import { TourProvider, useTour } from "./lib/tour";
 import "./lib/queries";
 
@@ -150,15 +152,10 @@ function AppShell() {
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
+      <GlobalLoadingBar />
       <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-slate-200">
         <div className="p-6 border-b border-slate-200">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-red-600 flex items-center justify-center text-white font-bold">LI</div>
-            <div>
-              <h2 className="text-slate-900 font-semibold">LensIQ</h2>
-              <p className="text-xs text-slate-600">CV for QSR</p>
-            </div>
-          </div>
+          <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
         </div>
         <div className="flex-1 p-4 overflow-y-auto">
           <NavItems activeView={activeView} userRole={userRole} />
@@ -190,13 +187,26 @@ function AppShell() {
                   </SheetContent>
                 </Sheet>
 
-                <div className="lg:hidden">
-                  <h1 className="text-slate-900 font-semibold">LensIQ</h1>
-                  <p className="text-sm text-slate-600 hidden sm:block">CV monitoring for quick-serve restaurants</p>
+                <div className="lg:hidden flex items-center gap-2">
+                  <ApertureIcon size={26} />
+                  <div>
+                    <h1
+                      className="text-slate-900 font-medium"
+                      style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}
+                    >
+                      LensIQ
+                    </h1>
+                    <p className="text-sm text-slate-600 hidden sm:block">CV monitoring for quick-serve restaurants</p>
+                  </div>
                 </div>
 
                 <div className="hidden lg:block">
-                  <h1 className="text-slate-900 font-semibold">{VIEW_TITLES[activeView] ?? "LensIQ"}</h1>
+                  <h1
+                    className="text-slate-900 font-medium"
+                    style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.02em" }}
+                  >
+                    {VIEW_TITLES[activeView] ?? "LensIQ"}
+                  </h1>
                 </div>
               </div>
 

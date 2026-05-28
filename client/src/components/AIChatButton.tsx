@@ -5,6 +5,7 @@ import {
   Sheet, SheetContent, SheetTrigger, Textarea,
 } from "@databricks/appkit-ui/react";
 import { Loader2, MessageCircle, Sparkles } from "lucide-react";
+import { ApertureIcon } from "./LensIQLogo";
 
 // Floating chat button that opens a sheet with a textbox. The textbox posts the
 // message to the configured LLM via /api/serving/llm/invoke through AppKit.
@@ -72,8 +73,11 @@ export function AIChatButton() {
         <Card className="flex-1 flex flex-col border-0 shadow-none">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-red-600" />
-              Ask LensIQ
+              <ApertureIcon size={20} title="LensIQ" />
+              <span>
+                Ask <span style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}>LensIQ</span>
+              </span>
+              <Sparkles className="w-4 h-4 text-lava-600" />
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden">
@@ -89,7 +93,7 @@ export function AIChatButton() {
                   <div className={
                     "inline-block max-w-[85%] rounded-lg px-3 py-2 text-sm " +
                     (m.role === "user"
-                      ? "bg-red-600 text-white"
+                      ? "bg-lava-600 text-white"
                       : "bg-slate-100 text-slate-900")
                   }>
                     {m.content}

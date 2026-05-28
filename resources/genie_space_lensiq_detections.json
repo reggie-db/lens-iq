@@ -1,0 +1,77 @@
+{
+  "version": 2,
+  "config": {
+    "sample_questions": [
+      {
+        "id": "01f15abcc3ea14e09b1b163b5b0d2237",
+        "question": [
+          "How many detections did we get in the last 24 hours, broken down by label?"
+        ]
+      },
+      {
+        "id": "01f15abcc3ea1b4d93e6e940f58f48df",
+        "question": [
+          "Which store had the most vehicle detections this week?"
+        ]
+      },
+      {
+        "id": "01f15abcc3eb1147b35997a049bfd4b3",
+        "question": [
+          "Show the hourly detection volume for the last 3 days."
+        ]
+      },
+      {
+        "id": "01f15abcc3eb16d0b89e581a2bf0c312",
+        "question": [
+          "What is the average detection confidence per label?"
+        ]
+      },
+      {
+        "id": "01f15abcc3eb1c2da625e0af3df82bd1",
+        "question": [
+          "Which cameras have been offline the most in the last day?"
+        ]
+      },
+      {
+        "id": "01f15abcc3ec11efa851f9b48faeff72",
+        "question": [
+          "List the most recent 20 alerts with their severity and store."
+        ]
+      },
+      {
+        "id": "01f15abcc3ec1848b591cac49c7fb3e5",
+        "question": [
+          "How many license plates were captured per state in the last 7 days?"
+        ]
+      },
+      {
+        "id": "01f15abcc3ec1e0f854b3bbc7003e47a",
+        "question": [
+          "Compare pipeline_frames throughput per camera over the last day."
+        ]
+      },
+      {
+        "id": "01f15abcc3ed14f2a984ec45081837c8",
+        "question": [
+          "Which stores generated the most critical alerts in the past week?"
+        ]
+      },
+      {
+        "id": "01f15abcc3ed1b32a42863544255ba38",
+        "question": [
+          "What are the top 5 most common detection labels overall?"
+        ]
+      }
+    ]
+  },
+  "data_sources": {
+    "tables": [
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.alerts"},
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.camera_status"},
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.detections"},
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.license_plates"},
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.pipeline_frames"},
+      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.stores"}
+    ]
+  }
+}

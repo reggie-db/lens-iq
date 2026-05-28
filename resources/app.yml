@@ -52,6 +52,16 @@ resources:
           serving_endpoint:
             name: ${var.fog_detector_endpoint}
             permission: CAN_QUERY
+        # LensIQ Detections Genie space. Commented out until the chat
+        # surface in the app wires this through (and until the racetrac
+        # target has its own space id - see databricks.yml). The space
+        # itself lives in resources/genie_space_lensiq_detections.json and
+        # is created out-of-band via the databricks-genie MCP, since DABs
+        # GA does not yet ship a top-level genie_spaces resource.
+        # - name: genie_space
+        #   genie_space:
+        #     space_id: ${var.genie_space_id}
+        #     permission: CAN_RUN
         - name: postgres
           # Lakebase Autoscaling Postgres backing app-side persistent state
           # (guest_counts written from the Guests page, fog_observations from

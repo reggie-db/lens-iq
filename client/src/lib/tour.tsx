@@ -5,9 +5,10 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@databricks/appkit-ui/react";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 
@@ -325,16 +326,63 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
   const [active, setActive] = useState(false);
   const [index, setIndex] = useState(0);
   const navigate = useNavigate();
+  const location = useLocation();
 
   const step = active ? (TOUR_STEPS[index] ?? null) : null;
 
-  // When a step has a `route`, navigate before the overlay tries to measure.
+  // Tracks the step id we've already issued a navigate() for, so the route
+  // effect fires exactly once per step entry. Without this, any later URL
+  // divergence (e.g. user clicks the sidebar mid-tour) would pull them back.
+  const navigatedForStepRef = useRef<string | null>(null);
+
+  // Tracks the step id whose route the URL has actually matched at least
+  // once. We only treat a URL divergence as "user manually navigated away"
+  // after the tour has successfully arrived at the step's route - otherwise
+  // we'd trip on the brief window between scheduling navigate() and the URL
+  // updating.
+  const arrivedAtStepRef = useRef<string | null>(null);
+
+  // Navigate to a step's `route`, but only the first time we enter that step.
+  // Subsequent renders (or URL changes the user makes themselves) won't pull
+  // them back to the step's route.
   useEffect(() => {
     if (!step?.route) return;
+    if (navigatedForStepRef.current === step.id) return;
+    navigatedForStepRef.current = step.id;
     if (window.location.pathname !== step.route) {
       navigate(step.route);
     }
   }, [step, navigate]);
+
+  // Record "arrived" the first time the URL matches the current step's route.
+  useEffect(() => {
+    if (!step?.route) return;
+    if (location.pathname === step.route) {
+      arrivedAtStepRef.current = step.id;
+    }
+  }, [step, location.pathname]);
+
+  // Auto-stop the tour when the user manually navigates away from the
+  // current step's route (e.g. clicks a sidebar item). We only stop after
+  // we've actually arrived at the step's route, so the initial schedule
+  // -> URL-update window doesn't false-trigger.
+  useEffect(() => {
+    if (!active || !step?.route) return;
+    if (
+      arrivedAtStepRef.current === step.id
+      && location.pathname !== step.route
+    ) {
+      setActive(false);
+    }
+  }, [active, step, location.pathname]);
+
+  // Reset the per-step trackers whenever the tour stops, so the next
+  // start() begins fresh.
+  useEffect(() => {
+    if (active) return;
+    navigatedForStepRef.current = null;
+    arrivedAtStepRef.current = null;
+  }, [active]);
 
   const start = useCallback(() => {
     setIndex(0);
@@ -364,20 +412,23 @@ export function TourProvider({ children }: { children: React.ReactNode }) {
     setIndex(Math.max(0, Math.min(TOUR_STEPS.length - 1, i)));
   }, []);
 
-  // Keyboard nav: ESC to close, arrow keys to step.
+  // Keyboard nav: ESC to close, arrow keys to step. Arrow keys are ignored
+  // when focus is inside a form control, contentEditable region, or a
+  // media element so the tour doesn't eat presses meant for scrubbing,
+  // typing, or scrolling. We also no longer preventDefault on arrow keys,
+  // so the page can still react to them when the tour chooses to skip.
   useEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
         stop();
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        next();
-      } else if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        prev();
+        return;
       }
+      if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+      if (_isInteractiveTarget(e.target)) return;
+      if (e.key === "ArrowRight") next();
+      else prev();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -559,6 +610,25 @@ function TourOverlay({ step }: { step: TourStep }) {
       </div>
     </div>
   );
+}
+
+// True if the keydown originated inside an element that handles its own
+// keyboard input - text fields, selects, content-editable regions, or
+// HTML5 media. Used by the tour's global arrow-key listener so it doesn't
+// steal presses meant for the focused control.
+function _isInteractiveTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (tag === "VIDEO" || tag === "AUDIO") return true;
+  if (target.isContentEditable) return true;
+  // Custom widgets that opt in to keyboard handling (combobox, listbox,
+  // slider, etc.) commonly carry an explicit role - respect that too.
+  const role = target.getAttribute("role");
+  if (role === "textbox" || role === "combobox" || role === "listbox" || role === "slider") {
+    return true;
+  }
+  return false;
 }
 
 // Convert a target rect + placement into an absolute CSS position object for

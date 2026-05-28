@@ -191,6 +191,32 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     local: "freezer-aisle-alt.mp4",
     models: ["fog_detector", "yolo"],
   },
+
+  // ---------------------------------------------------------------------------
+  // Grocery produce aisle - the canonical Camera Health demo pair. Wide-angle
+  // store interior view with shoppers, refrigerated produce cases on the
+  // left, central baskets of fruit, and visible store signage / weigh
+  // station - ideal stage for showing how a fogged lens degrades a
+  // general-purpose CCTV feed (vs the freezer-only clips which are tighter
+  // and less recognizable as "the camera over the store"). Sourced from
+  // Pexels (video 15754278, hd_1280_720_24fps). The `foggy-lens` variant is
+  // synthesized from the clear clip with the same radial Gaussian mask used
+  // for the other foggy variants.
+  // ---------------------------------------------------------------------------
+  {
+    id: "grocery-produce-aisle",
+    name: "Grocery produce aisle (CCTV)",
+    description: "Wide-angle daytime CCTV of a grocery store produce section: refrigerated produce cases, central baskets of apples and kiwi, shoppers and a cashier visible, store signage above. Crisp lens, every shelf legible. Default clear baseline for the fog_detector when paired with grocery-produce-aisle-foggy-lens.",
+    local: "grocery-produce-aisle.mp4",
+    models: ["fog_detector", "yolo", "people_count"],
+  },
+  {
+    id: "grocery-produce-aisle-foggy-lens",
+    name: "Grocery produce aisle (foggy lens)",
+    description: "Synthetic partial-fog version of grocery-produce-aisle - same vantage with a heavy center-blob smudge over the weigh station and central produce baskets. The fog hides the busiest area of the camera's field of view while shopping carts at the edges stay sharp, which is the exact failure mode the fog_detector is designed to catch before downstream models miss shoplifters / spills.",
+    local: "grocery-produce-aisle-foggy-lens.mp4",
+    models: ["fog_detector", "yolo", "people_count"],
+  },
 ];
 
 const _BY_ID = new Map<string, SampleVideo>(SAMPLE_VIDEOS.map((s) => [s.id, s]));

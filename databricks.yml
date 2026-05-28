@@ -39,6 +39,18 @@ variables:
   llm_endpoint:
     description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
     default: databricks-claude-opus-4-7
+  # ─── Genie space ───────────────────────────────────────────────────────
+  # ID of the "LensIQ Detections" Genie space backing the in-app chat
+  # surface (eventually wired through app.resources.genie_space). The
+  # space is currently created out-of-band via the databricks-genie MCP /
+  # `databricks genie spaces create` since DABs only ships GA support for
+  # binding an existing space to an app, not for declaring the space
+  # itself. The serialized config is checked in at
+  # resources/genie_space_lensiq_detections.json so the space can be
+  # recreated deterministically in any workspace.
+  genie_space_id:
+    description: Genie space ID for LensIQ Detections (bind via app.resources.genie_space).
+    default: 01f15abcc3b51cb4a4c36edf1b0d6e5e
   # ─── Serving endpoint names ────────────────────────────────────────────
   # One endpoint per use case so each detector has its own UC registered
   # model, scale-to-zero schedule, workload size, and version history.
@@ -97,6 +109,11 @@ targets:
       # Reuse the existing YOLO endpoint already in this workspace
       # (iot_dev.iot_ingest.yolo_object_detect served as iot-ingest-object-detection).
       detector_endpoint: iot-ingest-object-detection
+      # No Genie space provisioned in this workspace yet. Recreate from
+      # resources/genie_space_lensiq_detections.json (after remapping the
+      # catalog/schema to iot_dev.lensiq) and paste the new id here, then
+      # uncomment the app.resources.genie_space binding in resources/app.yml.
+      genie_space_id: ""
 
 resources:
   jobs:

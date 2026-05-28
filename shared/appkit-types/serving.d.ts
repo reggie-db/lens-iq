@@ -66,32 +66,44 @@ declare module "@databricks/appkit" {
     };
     license_plate: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     spill: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     wet_floor_sign: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     cigarette_vape: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     slip_fall: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     fog_detector: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
   }
@@ -160,32 +172,44 @@ declare module "@databricks/appkit-ui/react" {
     };
     license_plate: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     spill: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     wet_floor_sign: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     cigarette_vape: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     slip_fall: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
     fog_detector: {
       request: Record<string, unknown>;
-      response: unknown;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
       chunk: unknown;
     };
   }

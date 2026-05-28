@@ -117,8 +117,8 @@ const EMPTY_FEED_STATE: FeedState = {
 };
 
 export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
-  const [primarySource, setPrimarySource] = useState("freezer-aisle");
-  const [secondarySource, setSecondarySource] = useState("freezer-aisle-foggy-lens");
+  const [primarySource, setPrimarySource] = useState("grocery-produce-aisle");
+  const [secondarySource, setSecondarySource] = useState("grocery-produce-aisle-foggy-lens");
   const [primaryState, setPrimaryState] = useState<FeedState>(EMPTY_FEED_STATE);
   const [secondaryState, setSecondaryState] = useState<FeedState>(EMPTY_FEED_STATE);
   const [chartRows, setChartRows] = useState<ChartRow[]>([]);
