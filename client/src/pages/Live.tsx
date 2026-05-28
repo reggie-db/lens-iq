@@ -99,16 +99,17 @@ export function LivePage({ isActive }: LivePageProps) {
     let cancelled = false;
 
     const attachWebcam = async () => {
-      const stream = await requestCameraStream("environment");
+      const result = await requestCameraStream("environment");
       if (cancelled) {
-        stopMediaStream(stream);
+        stopMediaStream(result.stream);
         return;
       }
-      if (!stream) {
-        setStatus("Camera access denied");
+      if (!result.stream) {
+        setStatus(result.message);
         setStatusKind("error");
         return;
       }
+      const stream = result.stream;
       video.srcObject = stream;
       video.src = "";
       video.loop = false;
@@ -150,13 +151,20 @@ export function LivePage({ isActive }: LivePageProps) {
         h: video.videoHeight || 0,
       });
     };
+    const onError = () => {
+      if (sourceId === WEBCAM_SOURCE_ID) return;
+      setStatus(`Clip unavailable - check /api/sample-videos/${sourceId}`);
+      setStatusKind("error");
+    };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);
+    video.addEventListener("error", onError);
 
     return () => {
       cancelled = true;
       video.removeEventListener("loadedmetadata", syncVideoSize);
       video.removeEventListener("resize", syncVideoSize);
+      video.removeEventListener("error", onError);
       stopMediaStream((video.srcObject as MediaStream | null) ?? null);
       video.srcObject = null;
       video.removeAttribute("src");

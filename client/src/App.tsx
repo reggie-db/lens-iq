@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useState } from "react";
 import {
-  Activity, Bell, BookOpen, Camera, Car, CloudFog, Cpu, Database, LayoutDashboard,
+  Activity, Bell, BookOpen, Camera, Car, CloudFog, Cone, Cpu, Database, LayoutDashboard,
   Menu, Package, PlayCircle, TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
@@ -20,6 +20,7 @@ import { LivePage } from "./pages/Live";
 import { UploadPage } from "./pages/Upload";
 import { PipelinePage } from "./pages/Pipeline";
 import { GuestsPage } from "./pages/Guests";
+import { SpillsPage } from "./pages/Spills";
 import { CameraHealthPage } from "./pages/CameraHealth";
 import { InfoPage } from "./pages/Info";
 import { AIChatButton } from "./components/AIChatButton";
@@ -45,7 +46,8 @@ const VIEW_TITLES: Record<string, string> = {
   upload: "Image Upload",
   pipeline: "Continuous Pipeline",
   guests: "Guest Counts",
-  health: "Camera Health",
+  spills: "Spill Detection",
+  clarity: "Camera Clarity",
   info: "Talk Track",
 };
 
@@ -93,7 +95,8 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <NavButton view="live"       label="Live Detection" icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
       <NavButton view="guests"     label="Guest Counts"   icon={Users}          activeView={activeView} onNavigate={handle} />
       <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
-      <NavButton view="health"     label="Camera Health"  icon={CloudFog}       activeView={activeView} onNavigate={handle} />
+      <NavButton view="spills"     label="Spill Detection" icon={Cone}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="clarity"    label="Camera Clarity" icon={CloudFog}       activeView={activeView} onNavigate={handle} />
       <NavButton view="upload"     label="Image Upload"  icon={Upload}          activeView={activeView} onNavigate={handle} />
       <NavButton view="pipeline"   label="Pipeline"      icon={Workflow}        activeView={activeView} onNavigate={handle} />
       <NavButton view="detections" label="Detections"    icon={Camera}          activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
@@ -243,7 +246,8 @@ function AppShell() {
             <Route path="/trends" element={<TrendsPage />} />
             <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
             <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
-            <Route path="/health" element={<CameraHealthPage isActive={activeView === "health"} />} />
+            <Route path="/spills" element={<SpillsPage isActive={activeView === "spills"} />} />
+            <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             <Route path="/info" element={<InfoPage />} />

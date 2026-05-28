@@ -21,10 +21,22 @@ sync:
     - .cursor/
     - .vscode/
     - .databricks/
+    # Sample MP4s exceed the 10MB per-file Apps source-export limit, and even
+    # the small ones bloat the bundle upload. The client streams them straight
+    # from /api/files/sample_videos/raw?path=<file>, which the AppKit files
+    # plugin auto-mounts on the `sample_videos` volume
+    # (/Volumes/${var.catalog}/${var.schema}/sample_videos). To refresh the
+    # volume, re-run `scripts/sync-sample-videos.sh` (which calls
+    # `databricks fs cp client/public/sample-videos/*.mp4
+    # dbfs:/Volumes/<catalog>/<schema>/sample_videos/ --overwrite`).
+    - client/public/sample-videos/*.mp4
+    # Research footage parked under .tmp/ (git-ignored).
+    - .tmp/
 
 include:
   - resources/pipeline.yml
   - resources/app.yml
+  - resources/volumes.yml
 
 variables:
   catalog:
@@ -32,7 +44,7 @@ variables:
     default: reggie_pierce_7405614800873570
   schema:
     description: Schema for demo tables and the frame volume.
-    default: pizza_vision
+    default: lensiq
   warehouse_id:
     description: SQL Warehouse used by the analytics plugin.
     default: 6ef03decfb060f8a
@@ -61,59 +73,69 @@ variables:
     description: YOLO general-objects endpoint (custom ultralytics PyFunc).
     default: lensiq-detector
   license_plate_endpoint:
-    description: Roboflow license-plate proxy endpoint.
+    description: License-plate endpoint (Universe weights served locally via ultralytics).
     default: lensiq-license-plate
   spill_endpoint:
-    description: Roboflow spill proxy endpoint.
+    description: Spill endpoint (Universe weights served locally via ultralytics).
     default: lensiq-spill
   wet_floor_sign_endpoint:
-    description: Roboflow wet-floor-sign proxy endpoint.
+    description: Wet-floor-sign endpoint (Universe weights served locally via ultralytics).
     default: lensiq-wet-floor-sign
   cigarette_vape_endpoint:
-    description: Roboflow cigarette/vape proxy endpoint.
+    description: Cigarette/vape endpoint (Universe weights served locally via ultralytics).
     default: lensiq-cigarette-vape
   slip_fall_endpoint:
-    description: Roboflow slip-and-fall proxy endpoint.
+    description: Slip-and-fall endpoint (Universe weights served locally via ultralytics).
     default: lensiq-slip-fall
   fog_detector_endpoint:
     description: Standalone Pillow+numpy fog / lens-condition classifier.
     default: lensiq-fog-detector
 
-  # ─── Roboflow secret ──────────────────────────────────────────────────
-  # Same scope/key is shared across all 5 Roboflow proxy endpoints. The key
-  # is injected into each endpoint's ServedEntityInput.environment_vars so
-  # the served PyFunc reads it from os.environ at load time. The app SP
-  # itself never needs the secret.
+  # ─── Roboflow secret (deploy-time ONLY) ───────────────────────────────
+  # Used by `notebooks/deploy_roboflow_detector.ipynb` to call the
+  # Roboflow SDK and download the trained `weights.pt` for each Universe
+  # model into the MLflow artifact. The serving endpoints have ZERO
+  # outbound Roboflow dependency once deployed - inference runs locally
+  # via ultralytics against the baked-in weights. The app SP never needs
+  # this secret.
   roboflow_secret_scope:
-    description: Databricks secret scope holding ROBOFLOW_API_KEY.
+    description: Databricks secret scope holding ROBOFLOW_API_KEY (deploy time only).
     default: reggie_pierce
   roboflow_secret_key:
     description: Key inside roboflow_secret_scope that holds the Roboflow API key.
     default: ROBOFLOW_API_KEY
 
+  # ─── Lakebase Autoscaling postgres binding ────────────────────────────
+  # `projects/lens-iq/branches/production/databases/<lakebase_database>` is
+  # bound to the app via resources/app.yml -> postgres. The dev workspace
+  # has the long-form auto-generated database id (whose postgres-level db
+  # name is `lensiq`).
+  lakebase_database:
+    description: Lakebase Autoscaling database id under projects/lens-iq/branches/production.
+    default: db-wb61-xoxc0soijf
+
+  # ─── Apps tunnel token ────────────────────────────────────────────────
+  # Databricks secret holding the portr client token. scripts/start.sh
+  # interpolates the value into ~/.portr/config.yaml at boot.
+  apps_tunnel_secret_scope:
+    description: Secret scope holding the portr (apps.dbx.tools) client token.
+    default: reggie_pierce
+  apps_tunnel_secret_key:
+    description: Secret key for the portr client token under apps_tunnel_secret_scope.
+    default: apps_dbx_tools_token
+
 targets:
+  # Single generic dev target. The `host:` is the workspace URL only; the
+  # CLI auto-resolves the matching profile from ~/.databrickscfg by host
+  # match, so we deliberately do NOT pin a profile here. To deploy somewhere
+  # else, override at the command line:
+  #   databricks bundle deploy -t dev -p <profile>
+  # or set DATABRICKS_HOST / DATABRICKS_TOKEN in the environment.
   dev:
-    mode: development
-    workspace:
-      profile: DEFAULT
-  racetrac:
     mode: development
     default: true
     workspace:
-      profile: RACETRAC-DEV
-    variables:
-      catalog: iot_dev
-      schema: lensiq
-      warehouse_id: b087b375a8f43baa
-      llm_endpoint: databricks-claude-opus-4-7
-      # Reuse the existing YOLO endpoint already in this workspace
-      # (iot_dev.iot_ingest.yolo_object_detect served as iot-ingest-object-detection).
-      detector_endpoint: iot-ingest-object-detection
-      # No Genie space provisioned in this workspace yet. Recreate from
-      # resources/genie_space_lensiq_detections.json (after remapping the
-      # catalog/schema to iot_dev.lensiq) and paste the new id here, then
-      # uncomment the app.resources.genie_space binding in resources/app.yml.
-      genie_space_id: ""
+      host: https://adb-7405614800873570.10.azuredatabricks.net
 
 resources:
   jobs:
@@ -139,22 +161,22 @@ resources:
               registered_name: lensiq_detector
               endpoint_name: ${var.detector_endpoint}
 
-    # Fan-out deploy of the 5 Roboflow proxy endpoints. Each task runs the
-    # same parameterized notebook with a different `model_slug` +
-    # `roboflow_model_id`, producing its own UC registered model and its own
-    # serving endpoint. Re-run an individual task to ship a new version of
-    # just that detector without touching the others.
+    # Fan-out deploy of the 5 Roboflow-Universe-backed detector endpoints.
+    # Each task runs the same parameterized notebook with a different
+    # `model_slug` + `roboflow_{workspace,project,version}` triple. The
+    # notebook downloads the trained `weights.pt` from Roboflow at deploy
+    # time, bakes them into a Databricks-native ultralytics PyFunc, and
+    # registers / deploys a dedicated UC model + serving endpoint per
+    # detector. Re-run an individual task to ship a new version of just
+    # that detector. At serve time there is NO outbound call to Roboflow
+    # - inference runs locally inside the endpoint.
     lensiq_deploy_roboflow_detectors:
       name: lensiq_deploy_roboflow_detectors
       tasks:
-        # IMPORTANT: roboflow_model_id MUST be the 2-segment form
-        # `<project-slug>/<version>` that serverless.roboflow.com expects.
-        # Universe model URLs like
-        # `https://universe.roboflow.com/<workspace>/<project>/model/<version>`
-        # do NOT translate to `<workspace>/<project>/<version>` at the
-        # inference API - the workspace prefix produces a 405 Method Not
-        # Allowed. Each ID below was probed against the workspace API key
-        # (workspace `reggiedb`) and returns 200 with a `predictions` array.
+        # Triples below are read from the Universe URL:
+        #   https://universe.roboflow.com/<workspace>/<project>/model/<version>
+        # The Roboflow Python SDK call inside the notebook is:
+        #   Roboflow(api_key=...).workspace(WS).project(PROJ).version(VER).model.download()
         - task_key: deploy_license_plate
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -163,9 +185,23 @@ resources:
               schema: ${var.schema}
               model_slug: license_plate
               model_display_name: License plates
-              roboflow_model_id: license-plates-f8vsn/5
+              roboflow_workspace: samrat-sahoo
+              roboflow_project: license-plates-f8vsn
+              roboflow_version: "5"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
+        # Spill detector. Backed by zan-compute/dial-wet-floor-segmentation,
+        # which catches wet patches on aisle floors but emits noise on
+        # shelves and frame edges. We post-filter inside the PyFunc. The
+        # legit spill signal sits at cf 0.20-0.41 on the candidate aisle
+        # clip with a few borderline frames at exactly 0.20, so we set
+        # min_confidence=0.18 to keep the borderline ones; the noisy
+        # low-conf edge slivers (cf 0.16-0.18 at <1% area) are rejected
+        # by the geometric filters: min_area=2% kills the slivers,
+        # min_y_center=55% rejects shelf-top hallucinations, max_area=20%
+        # caps any future frame-spanning ones. Class label is rewritten
+        # from the upstream "Water-u6Vi" to the endpoint slug "spill" so
+        # the AppKit chart tinting works.
         - task_key: deploy_spill
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -174,9 +210,24 @@ resources:
               schema: ${var.schema}
               model_slug: spill
               model_display_name: Spills
-              roboflow_model_id: spills-ax5xv/2
+              roboflow_workspace: zan-compute
+              roboflow_project: dial-wet-floor-segmentation
+              roboflow_version: "1"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
+              class_label_override: spill
+              min_confidence: "0.18"
+              min_area_pct: "2.0"
+              max_area_pct: "20.0"
+              min_y_center_pct: "55.0"
+        # Wet-floor-sign / cone detector. Backed by frc-5881/wet-floor-nhjwl
+        # whose only class is the generic label "sign". Tested clean across
+        # the candidate aisle clip (cone correctly fires at conf 0.83-0.87
+        # only after deployment, no pre-deployment FPs) and unrelated cstore
+        # / forecourt CCTV (0 detections). Filter knobs: min_confidence=0.50
+        # cuts the long tail; max_area=8% kills hallucinated frame-spanning
+        # boxes; min_y_center=40% rejects ceiling/shelf signage; class label
+        # rewritten "sign" -> "wet_floor_sign" to match the endpoint slug.
         - task_key: deploy_wet_floor_sign
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -185,9 +236,16 @@ resources:
               schema: ${var.schema}
               model_slug: wet_floor_sign
               model_display_name: Wet floor sign
-              roboflow_model_id: wet-floor-sign2/1
+              roboflow_workspace: frc-5881
+              roboflow_project: wet-floor-nhjwl
+              roboflow_version: "1"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
+              class_label_override: wet_floor_sign
+              min_confidence: "0.50"
+              min_area_pct: "0.3"
+              max_area_pct: "8.0"
+              min_y_center_pct: "40.0"
         - task_key: deploy_cigarette_vape
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -196,7 +254,9 @@ resources:
               schema: ${var.schema}
               model_slug: cigarette_vape
               model_display_name: Cigarette / vape
-              roboflow_model_id: cigarette-vape-detection-lagrc-4ypjd/3
+              roboflow_workspace: train-qjr0z
+              roboflow_project: cigarette-vape-detection-lagrc-4ypjd
+              roboflow_version: "3"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_slip_fall
@@ -207,7 +267,9 @@ resources:
               schema: ${var.schema}
               model_slug: slip_fall
               model_display_name: Slip & fall
-              roboflow_model_id: slip-and-fall/1
+              roboflow_workspace: sensormatic
+              roboflow_project: slip-and-fall
+              roboflow_version: "1"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
 

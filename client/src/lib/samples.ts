@@ -1,13 +1,17 @@
 // Curated catalog of sample input videos for the Live page demo.
 //
 // Two flavors:
-//   - `upstream`: cross-origin MP4 streamed through /api/sample-videos/:id so
-//     the proxy can strip CORS for canvas capture. Used for the Roboflow
-//     `supervision` sample reel.
-//   - `local`: file shipped under client/public/sample-videos/, served by
-//     Vite in dev and by the static path in prod. Same-origin so no proxy
-//     is needed. Used for the QSR / c-store / forecourt CCTV clips and the
-//     spill / slip / cone safety clips downloaded for the detection demos.
+//   - `upstream`: cross-origin MP4 hosted on a CDN (Roboflow `supervision`
+//     reel). server.ts proxies it through to strip CORS for canvas capture.
+//   - `local`: filename that lives both in client/public/sample-videos/ on
+//     disk AND in the `sample_videos` UC volume. server.ts resolves these
+//     in this order: local file (Range-aware fast path for dev), then the
+//     volume via the AppKit files plugin (deployed apps - the bundle
+//     excludes the MP4s from the app source upload to stay under the 10MB
+//     per-file Apps limit, so the SP reads from the volume in prod).
+//
+// Either way the client only ever hits /api/sample-videos/:id; the server
+// picks the right source. Everything runs as the app SP - no OBO.
 //
 // `models` lists the LensIQ model ids (see ./models.ts) that the sample is a
 // good demo for - the UI uses this to suggest a relevant detector when the
@@ -103,6 +107,13 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     description: "HD overhead CCTV inside a convenience store: aisles, customers, register area. Strong fit for yolo, people_count, cigarette_vape. Also the `clear` baseline for the fog_detector when paired with cstore-foggy-lens.",
     local: "cstore-hd-cctv.mp4",
     models: ["yolo", "people_count", "cigarette_vape", "fog_detector"],
+  },
+  {
+    id: "aisle-spill-then-cone",
+    name: "Aisle spill then cone deployed (CCTV)",
+    description: "UK supermarket aisle CCTV (timestamped 2020-10-05 15:08). A wet patch is visible on the floor for the first ~26 seconds with shoppers walking past, then a worker deploys a yellow CAUTION WET FLOOR cone at ~27s. The canonical end-to-end source for the spill -> wet_floor_sign storyline: the spill detector fires throughout, then the wet_floor_sign detector kicks in once the cone is on the floor.",
+    local: "aisle-spill-then-cone.mp4",
+    models: ["spill", "wet_floor_sign", "yolo"],
   },
   {
     id: "lobby-wet-floor-cctv",
@@ -225,12 +236,10 @@ export function getSampleVideo(id: string): SampleVideo | undefined {
   return _BY_ID.get(id);
 }
 
-// Resolve the URL the <video> element should pull from. Local samples are
-// served by the same origin (Vite dev / static dist in prod) so no proxy
-// needed; cross-origin upstreams go through /api/sample-videos/:id which
-// strips CORS for canvas capture.
+// Resolve the URL the <video> element should pull from. One endpoint for
+// every flavor; the server picks local-disk vs. UC volume vs. upstream CDN
+// based on the sample id. Always same-origin so canvas capture works.
 export function sampleVideoUrl(sample: SampleVideo): string {
-  if (sample.local) return `/sample-videos/${sample.local}`;
   return `/api/sample-videos/${sample.id}`;
 }
 

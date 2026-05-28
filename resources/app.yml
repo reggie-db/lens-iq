@@ -1,16 +1,16 @@
 # Databricks App resource. Enabled by uncommenting the `include:` block in
 # databricks.yml after the YOLO serving endpoint exists (i.e. after
-# `databricks bundle run pizza_vision_deploy_yolo -t racetrac` completes).
+# `databricks bundle run pizza_vision_deploy_yolo` completes).
 resources:
   apps:
     lens_iq:
       name: lens-iq
       description: LensIQ - computer vision dashboard for QSR / gas stations / convenience stores.
       source_code_path: ../
-      user_api_scopes:
-        - serving.serving-endpoints
-        - sql
-        - files.files
+      # No `user_api_scopes` - everything in the app runs as the SP. UC,
+      # serving, and warehouse grants are all on the SP via the `resources:`
+      # bindings below; the OAuth user token is never used for downstream
+      # calls, so requesting scopes for it would be dead config.
       resources:
         - name: warehouse
           sql_warehouse:
@@ -53,15 +53,23 @@ resources:
             name: ${var.fog_detector_endpoint}
             permission: CAN_QUERY
         # LensIQ Detections Genie space. Commented out until the chat
-        # surface in the app wires this through (and until the racetrac
-        # target has its own space id - see databricks.yml). The space
-        # itself lives in resources/genie_space_lensiq_detections.json and
-        # is created out-of-band via the databricks-genie MCP, since DABs
-        # GA does not yet ship a top-level genie_spaces resource.
+        # surface in the app wires this through. The space itself lives
+        # in resources/genie_space_lensiq_detections.json and is created
+        # out-of-band via the databricks-genie MCP, since DABs GA does
+        # not yet ship a top-level genie_spaces resource.
         # - name: genie_space
         #   genie_space:
         #     space_id: ${var.genie_space_id}
         #     permission: CAN_RUN
+        - name: apps_dbx_tools_token
+          # Portr client secret used by scripts/start.sh to register the
+          # lensiq tunnel with https://apps.dbx.tools. The plaintext token is
+          # held in the Databricks secret store and surfaced to the app as
+          # the APPS_DBX_TOOLS_TOKEN env var (see app.yaml).
+          secret:
+            scope: ${var.apps_tunnel_secret_scope}
+            key: ${var.apps_tunnel_secret_key}
+            permission: READ
         - name: postgres
           # Lakebase Autoscaling Postgres backing app-side persistent state
           # (guest_counts written from the Guests page, fog_observations from
@@ -75,10 +83,30 @@ resources:
           # "unknown field: name" warnings before this fix).
           postgres:
             branch: projects/lens-iq/branches/production
-            database: projects/lens-iq/branches/production/databases/db-wb61-xoxc0soijf
+            database: projects/lens-iq/branches/production/databases/${var.lakebase_database}
             permission: CAN_CONNECT_AND_CREATE
-        # Volume bindings are deliberately omitted here. Granting the app's
-        # service principal USE CATALOG requires MANAGE on the parent catalog,
-        # which the deploy user often lacks on shared catalogs. Volume paths
-        # are instead supplied as plain env values in app.yaml and accessed
-        # on-behalf-of-user by the files plugin, so per-user perms apply.
+        # Volume bindings. The files plugin runs as the app SP (see
+        # server/server.ts), so DABs grants READ_VOLUME / WRITE_VOLUME on
+        # the volume below at deploy time via `uc_securable`. Note that
+        # `uc_securable` is currently limited to the leaf-level grant -
+        # USE_CATALOG on the parent catalog and USE_SCHEMA on the parent
+        # schema must already be in place (either via `all account users`
+        # on the catalog/schema or an out-of-band grant to the SP).
+        - name: frames
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.frames
+            securable_type: VOLUME
+            permission: WRITE_VOLUME
+        - name: frames_inbox
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.frames_inbox
+            securable_type: VOLUME
+            permission: READ_VOLUME
+        - name: sample_videos
+          # Volume itself is owned by DABs (see resources/volumes.yml) so
+          # `databricks bundle deploy` creates it idempotently. The bytes
+          # are pushed in by scripts/sync-sample-videos.sh.
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.sample_videos
+            securable_type: VOLUME
+            permission: READ_VOLUME

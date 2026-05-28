@@ -22,20 +22,68 @@ export interface DetectionFrame {
   scaleY: number;
 }
 
+export interface CameraStreamResult {
+  stream: MediaStream | null;
+  /** Why the stream is null. `null` when stream is not null. */
+  reason: "ok" | "insecure-context" | "denied" | "no-camera" | "error";
+  message: string;
+}
+
+// `navigator.mediaDevices` is only exposed on secure contexts: HTTPS pages
+// and same-origin loopback (`localhost`, `127.0.0.1`, `::1`). Loading the
+// dev server over a LAN IP (`http://192.168.x.x:8001`) or any other plain
+// HTTP host leaves `mediaDevices` undefined, and a naive `getUserMedia`
+// call throws `TypeError: Cannot read properties of undefined`. Detect
+// that up front so we can show a useful "use HTTPS or localhost" message
+// instead of a misleading "Camera access denied".
+function _isSecureCameraContext(): boolean {
+  if (typeof window === "undefined") return false;
+  if (!window.isSecureContext) return false;
+  return Boolean(navigator.mediaDevices?.getUserMedia);
+}
+
 export async function requestCameraStream(
   facingMode: "environment" | "user" = "environment",
-): Promise<MediaStream | null> {
+): Promise<CameraStreamResult> {
+  if (!_isSecureCameraContext()) {
+    const host = typeof window !== "undefined" ? window.location.host : "?";
+    return {
+      stream: null,
+      reason: "insecure-context",
+      message: `Camera unavailable on http://${host}. Open the app via http://localhost or HTTPS to use the webcam.`,
+    };
+  }
   try {
-    return await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: { ideal: facingMode },
         width: { ideal: VIDEO_WIDTH_IDEAL, max: VIDEO_WIDTH_IDEAL },
         height: { ideal: VIDEO_HEIGHT_IDEAL, max: VIDEO_HEIGHT_IDEAL },
       },
     });
+    return { stream, reason: "ok", message: "" };
   } catch (err) {
+    const name = err instanceof Error ? err.name : "";
+    if (name === "NotAllowedError" || name === "SecurityError") {
+      return {
+        stream: null,
+        reason: "denied",
+        message: "Camera access denied. Allow camera permission in your browser to use the webcam.",
+      };
+    }
+    if (name === "NotFoundError" || name === "OverconstrainedError") {
+      return {
+        stream: null,
+        reason: "no-camera",
+        message: "No camera found. Pick a sample video instead, or attach a webcam.",
+      };
+    }
     console.error("Camera access error:", err);
-    return null;
+    return {
+      stream: null,
+      reason: "error",
+      message: err instanceof Error ? err.message : "Unable to start the camera.",
+    };
   }
 }
 

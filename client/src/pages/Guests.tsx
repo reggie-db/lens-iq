@@ -385,11 +385,16 @@ function GuestFeed({
     const syncVideoSize = () => {
       setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
     };
+    const onError = () => {
+      setStatus(`Clip unavailable - check /api/sample-videos/${sample.id}`);
+    };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);
+    video.addEventListener("error", onError);
     return () => {
       video.removeEventListener("loadedmetadata", syncVideoSize);
       video.removeEventListener("resize", syncVideoSize);
+      video.removeEventListener("error", onError);
       video.removeAttribute("src");
       video.load();
     };

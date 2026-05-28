@@ -1,22 +1,36 @@
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import { analytics, createApp, files, lakebase, serving, server, sql } from "@databricks/appkit";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
 
+const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
+const VIDEO_CONTENT_TYPE = "video/mp4";
+
 // LensIQ AppKit server.
+//
+// Everything in this app runs as the app's service principal. There is no
+// `asUser(req)` anywhere - the SP holds the UC + serving + warehouse grants,
+// and HTTP routes never need the end user's identity for downstream calls.
+// app.yaml therefore omits `user_api_scopes` entirely.
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
-//   - analytics(): file-based SQL queries against the SQL warehouse.
+//   - analytics(): file-based SQL queries against the SQL warehouse (SP).
 //   - serving({ llm, detector, license_plate, spill, wet_floor_sign,
 //               cigarette_vape, slip_fall, fog_detector }):
 //     One Databricks Model Serving endpoint per use case. Each alias is
-//     bound to its own UC registered model + endpoint. All invocations are
-//     on behalf of the end user (OBO). The model selected by the client
-//     maps 1:1 to its `servingAlias` (see client/src/lib/models.ts).
-//   - files({ volumes: { frames } }): Unity Catalog volume for stored frames.
-//     Auto-mounts /api/files/frames/raw?path=<id>.jpg for image bytes.
+//     bound to its own UC registered model + endpoint. The model selected
+//     by the client maps 1:1 to its `servingAlias` (see client/src/lib/models.ts).
+//   - files({ volumes: { frames, inbox, sample_videos } }): UC volumes
+//     (frames for app captures, inbox for the SDP pipeline, sample_videos
+//     for the demo MP4 catalog). All run as SP. The `sample_videos` volume
+//     is reached programmatically only - the public route is the dedicated
+//     /api/sample-videos/:id below, which adds a local-disk fast path for
+//     the dev devloop.
 //
 // Additional custom routes wired up below:
 //   - GET  /api/models             : Returns the shared MODELS registry so the
@@ -213,6 +227,157 @@ function _extractChatText(payload: unknown): string {
   return "";
 }
 
+// Stream a local sample MP4 from client/public/sample-videos/<filename>. The
+// path is constrained to LOCAL_SAMPLE_VIDEO_DIR (no traversal). HTTP Range
+// requests are honored so HTML5 <video> seeking works smoothly.
+// Returns true when the response was served (handler should bail out), false
+// when the file does not exist locally and the caller should fall through to
+// the next source. Other errors (permissions, EBADF, etc.) bubble up so the
+// caller can surface them as 500.
+async function _streamLocalSampleVideo(
+  filename: string,
+  req: import("express").Request,
+  res: import("express").Response,
+): Promise<boolean> {
+  const fullPath = resolvePath(LOCAL_SAMPLE_VIDEO_DIR, filename);
+  if (!fullPath.startsWith(`${LOCAL_SAMPLE_VIDEO_DIR}/`)) return false;
+
+  let stats: Awaited<ReturnType<typeof stat>>;
+  try {
+    stats = await stat(fullPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+  if (!stats.isFile()) return false;
+
+  const totalSize = stats.size;
+  const rangeHeader = req.headers.range;
+  res.setHeader("Content-Type", VIDEO_CONTENT_TYPE);
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "public, max-age=3600");
+
+  if (rangeHeader && typeof rangeHeader === "string") {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+    if (match) {
+      const start = match[1] === "" ? 0 : Number.parseInt(match[1], 10);
+      const end = match[2] === "" ? totalSize - 1 : Number.parseInt(match[2], 10);
+      if (
+        Number.isFinite(start) && Number.isFinite(end) &&
+        start >= 0 && end < totalSize && start <= end
+      ) {
+        res.status(206);
+        res.setHeader("Content-Range", `bytes ${start}-${end}/${totalSize}`);
+        res.setHeader("Content-Length", String(end - start + 1));
+        createReadStream(fullPath, { start, end }).pipe(res);
+        return true;
+      }
+      res.status(416);
+      res.setHeader("Content-Range", `bytes */${totalSize}`);
+      res.end();
+      return true;
+    }
+  }
+
+  res.status(200);
+  res.setHeader("Content-Length", String(totalSize));
+  createReadStream(fullPath).pipe(res);
+  return true;
+}
+
+// Volume handle shape that the AppKit files plugin's programmatic API
+// exposes. Re-declared here as a structural minimum so the helper doesn't
+// have to import the full `VolumeHandle` type from a deep AppKit path.
+// `contents` is left as `unknown` to bridge the SDK's
+// `ReadableStream<Uint8Array>` with the variance differences in TS's
+// global ReadableStream lib types - we cast at the .pipe call site.
+interface SampleVolume {
+  download(path: string): Promise<{
+    contents?: unknown;
+    "content-length"?: number;
+    "content-type"?: string;
+  }>;
+}
+
+// Stream a sample MP4 from the given UC volume handle, running as whatever
+// identity the plugin resolved for the volume (service principal in this
+// app - we never call .asUser here). Returns true when the volume served
+// bytes, false on FILES_API_FILE_NOT_FOUND so the caller can return 404 or
+// fall through. Other errors are logged + treated as "miss" so the demo
+// keeps running locally when the volume is unreachable.
+async function _streamVolumeSampleVideo(
+  volume: SampleVolume,
+  filename: string,
+  res: import("express").Response,
+): Promise<boolean> {
+  let body: Awaited<ReturnType<SampleVolume["download"]>>;
+  try {
+    body = await volume.download(filename);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("FILES_API_FILE_NOT_FOUND") || msg.includes("Not Found")) {
+      return false;
+    }
+    console.warn(`sample_videos volume download failed for ${filename}:`, msg);
+    return false;
+  }
+  if (!body.contents) return false;
+
+  res.status(200);
+  res.setHeader("Content-Type", body["content-type"] ?? VIDEO_CONTENT_TYPE);
+  if (typeof body["content-length"] === "number") {
+    res.setHeader("Content-Length", String(body["content-length"]));
+  }
+  res.setHeader("Cache-Control", "public, max-age=3600");
+  Readable.fromWeb(body.contents as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  return true;
+}
+
+// Proxy a cross-origin sample MP4 (Roboflow `supervision` reel etc.) so the
+// canvas-tainting CORS problem on those CDN URLs goes away. Range headers
+// are forwarded both ways so HTML5 <video> seek still works.
+async function _proxyUpstreamSampleVideo(
+  upstream: string,
+  req: import("express").Request,
+  res: import("express").Response,
+): Promise<void> {
+  const upstreamHeaders: Record<string, string> = {};
+  if (typeof req.headers.range === "string") {
+    upstreamHeaders.range = req.headers.range;
+  }
+
+  let upstreamRes: Response;
+  try {
+    upstreamRes = await fetch(upstream, { headers: upstreamHeaders });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    res.status(502).json({ error: `Sample upstream failed: ${message}` });
+    return;
+  }
+
+  if (upstreamRes.status !== 200 && upstreamRes.status !== 206) {
+    res.status(upstreamRes.status).end();
+    return;
+  }
+
+  const passthroughHeaders = [
+    "content-type", "content-length", "content-range",
+    "accept-ranges", "last-modified", "etag",
+  ];
+  for (const name of passthroughHeaders) {
+    const value = upstreamRes.headers.get(name);
+    if (value) res.setHeader(name, value);
+  }
+  res.setHeader("cache-control", "public, max-age=3600");
+  res.status(upstreamRes.status);
+
+  if (!upstreamRes.body) {
+    res.end();
+    return;
+  }
+  Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+}
+
 const AppKit = await createApp({
   cache: {
     enabled: true,
@@ -228,7 +393,17 @@ const AppKit = await createApp({
     // captureVideoFrameForDetection / resizeDataUrlForDetection downscale the
     // image client-side. Below this the Live tick stays well under 200KB; the
     // snapshot/upload path tops out around 1MB even on busy 1080p frames.
-    server({ bodyLimit: "8mb" }),
+    //
+    // host: bind to loopback in dev so the server doesn't accept connections
+    // from the LAN (LAN access also breaks getUserMedia anyway since plain
+    // HTTP on a non-localhost host is not a secure context). On the
+    // Databricks Apps platform the runtime sets DATABRICKS_APP_PORT and we
+    // need 0.0.0.0 so the platform proxy can reach the listener; NODE_ENV
+    // is set to "production" in app.yaml so the prod branch picks that up.
+    server({
+      bodyLimit: "8mb",
+      host: process.env.NODE_ENV === "production" ? "0.0.0.0" : "127.0.0.1",
+    }),
     analytics({}),
     serving({
       endpoints: {
@@ -246,13 +421,23 @@ const AppKit = await createApp({
       },
     }),
     files({
-      auth: "on-behalf-of-user",
+      // Volumes are reached as the app service principal. The DAB declares
+      // the required READ/WRITE_VOLUME grants via `app.resources` in
+      // resources/app.yml, so the SP gets the access it needs at deploy
+      // time without any per-user grants. publicRead / allowAll policies
+      // gate the HTTP endpoints (any authenticated app user can call them);
+      // the SP is what actually touches UC underneath.
+      auth: "service-principal",
       volumes: {
-        // `frames` is the app-capture volume (webcam/upload) - read+write.
+        // App-capture volume (webcam/upload) — read+write.
         frames: { policy: files.policy.allowAll() },
-        // `inbox` mirrors the SDP pipeline's drop volume so the Pipeline page
-        // can serve raw frames the pipeline processed via /api/files/inbox/raw.
+        // Drop volume the SDP pipeline writes to; the Pipeline page serves
+        // raw frames via /api/files/inbox/raw.
         inbox: { policy: files.policy.publicRead() },
+        // Read-only catalog of demo MP4s. Auto-mounted at
+        //   GET /api/files/sample_videos/raw?path=<file>
+        // which client/src/lib/samples.ts uses via sampleVideoUrl().
+        sample_videos: { policy: files.policy.publicRead() },
       },
     }),
     // Lakebase Postgres backs persistent app-side state (e.g. guest_counts).
@@ -306,17 +491,34 @@ const AppKit = await createApp({
 
       // ─── Sample videos ──────────────────────────────────────────────────
       //
-      // Roboflow hosts the `supervision` library's video assets on a CDN that
-      // doesn't emit CORS headers (no Access-Control-Allow-Origin). A
-      // <video crossorigin="anonymous"> pointing at those URLs would render
-      // fine, but the moment we draw it into a <canvas> the canvas gets
-      // "tainted" and subsequent toDataURL() calls throw a SecurityError - so
-      // the Live page's detection loop can't grab frames.
+      // One endpoint handles every flavor of demo video:
       //
-      // To make those assets usable, we re-host them through this proxy.
-      // Range/Content-Range/Content-Length are forwarded so the browser can
-      // seek smoothly. The upstream catalog lives in client/src/lib/samples.ts
-      // so the client and server share one source of truth.
+      //   GET /api/sample-videos              -> JSON catalog (id -> url, etc).
+      //   GET /api/sample-videos/:id          -> bytes, with the resolution
+      //                                          chain below.
+      //
+      // The `:id` route resolves the bytes in this order, falling through on
+      // miss until something serves:
+      //
+      //   1. `local` samples: client/public/sample-videos/<filename> on disk.
+      //      Streamed via fs.createReadStream with HTTP Range support so the
+      //      <video> element can seek. This is the dev-loop fast path - the
+      //      MP4s ship with the repo (they're git-tracked) so a fresh clone
+      //      can demo without any Databricks resources online.
+      //   2. `local` samples that miss locally: fall back to the
+      //      `sample_videos` UC volume via the AppKit files plugin's
+      //      programmatic API (`.download()`, runs as the app SP). The bundle
+      //      excludes the local MP4s from the app source upload (see
+      //      databricks.yml -> sync.exclude) so deployed apps always take
+      //      this path. No Range support here - the SDK download returns the
+      //      full body - but browsers degrade gracefully.
+      //   3. `upstream` samples (Roboflow CDN): proxied through this server
+      //      so the canvas-tainting CORS problem goes away. Range headers
+      //      are forwarded both ways so seek still works.
+      //
+      // Everything runs as the service principal; no OBO anywhere. The
+      // upstream catalog lives in client/src/lib/samples.ts so the client
+      // and server share one source of truth.
 
       app.get("/api/sample-videos", (_req, res) => {
         res.json({
@@ -325,7 +527,7 @@ const AppKit = await createApp({
             name: s.name,
             description: s.description,
             models: s.models,
-            url: s.local ? `/sample-videos/${s.local}` : `/api/sample-videos/${s.id}`,
+            url: `/api/sample-videos/${s.id}`,
           })),
         });
       });
@@ -336,62 +538,24 @@ const AppKit = await createApp({
           res.status(404).json({ error: `Unknown sample id: ${req.params.id}` });
           return;
         }
-        // Local samples are served same-origin via /sample-videos/<file>; the
-        // client should never proxy them through here. If it does, hint at the
-        // right URL instead of falling through into a broken fetch.
-        if (!sample.upstream) {
-          res.status(400).json({
-            error: `Sample ${sample.id} is local; fetch it from /sample-videos/${sample.local}`,
+
+        if (sample.local) {
+          if (await _streamLocalSampleVideo(sample.local, req, res)) return;
+          if (await _streamVolumeSampleVideo(appkit.files("sample_videos"), sample.local, res)) return;
+          res.status(404).json({
+            error: `Sample ${sample.id} not found locally or in the sample_videos volume.`,
           });
           return;
         }
 
-        const upstreamHeaders: Record<string, string> = {};
-        if (typeof req.headers.range === "string") {
-          upstreamHeaders.range = req.headers.range;
-        }
-
-        let upstreamRes: Response;
-        try {
-          upstreamRes = await fetch(sample.upstream, { headers: upstreamHeaders });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({ error: `Sample upstream failed: ${message}` });
+        if (sample.upstream) {
+          await _proxyUpstreamSampleVideo(sample.upstream, req, res);
           return;
         }
 
-        // 200 (full body) and 206 (range response) both carry usable bytes.
-        // Anything else means the upstream rejected us and there's nothing
-        // useful to forward.
-        if (upstreamRes.status !== 200 && upstreamRes.status !== 206) {
-          res.status(upstreamRes.status).end();
-          return;
-        }
-
-        const passthroughHeaders = [
-          "content-type",
-          "content-length",
-          "content-range",
-          "accept-ranges",
-          "last-modified",
-          "etag",
-        ];
-        for (const name of passthroughHeaders) {
-          const value = upstreamRes.headers.get(name);
-          if (value) res.setHeader(name, value);
-        }
-        res.setHeader("cache-control", "public, max-age=3600");
-        res.status(upstreamRes.status);
-
-        if (!upstreamRes.body) {
-          res.end();
-          return;
-        }
-        // Node's typings for Readable.fromWeb expect a node-stream/web
-        // ReadableStream; the global fetch returns the slightly different DOM
-        // type. They're structurally compatible at runtime so a single cast
-        // is enough.
-        Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+        res.status(500).json({
+          error: `Sample ${sample.id} is misconfigured (no local or upstream source).`,
+        });
       });
 
       app.post("/api/detect", async (req, res) => {
@@ -416,7 +580,7 @@ const AppKit = await createApp({
 
         let detections: NormalizedDetection[] = [];
         try {
-          const result = (await appkit.serving(model.servingAlias).asUser(req).invoke({
+          const result = (await appkit.serving(model.servingAlias).invoke({
             dataframe_records: [row],
           })) as ServingInvokeResult;
           if (!result.ok) {
@@ -439,7 +603,7 @@ const AppKit = await createApp({
             if (!buffer) throw new Error("Could not decode base64 image.");
             const frameId = `frame_${Date.now()}`;
             const fileName = `${frameId}.jpg`;
-            await appkit.files("frames").asUser(req).upload(fileName, buffer, { overwrite: true });
+            await appkit.files("frames").upload(fileName, buffer, { overwrite: true });
 
             // Insert one row per detection so the Detections page (driven by
             // /api/detections/stream and the recent-detections query) picks
@@ -596,7 +760,7 @@ const AppKit = await createApp({
           'If you cannot identify the plate at all, respond with: {"plate":"UNREADABLE","bbox":null}',
         ].join(" ");
         try {
-          const result = (await appkit.serving("llm").asUser(req).invoke({
+          const result = (await appkit.serving("llm").invoke({
             messages: [
               {
                 role: "user",
@@ -854,6 +1018,138 @@ const AppKit = await createApp({
             [limit],
           );
           res.json({ rows: result.rows });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase query failed: ${message}` });
+        }
+      });
+
+      // ─── Spill -> cone response cycles ────────────────────────────────
+      //
+      // The Spills page (Spills.tsx) runs both `spill` and `wet_floor_sign`
+      // detectors on the same looping aisle clip. A "cycle" = the wall-clock
+      // delta between the first spill detection and the first cone
+      // detection. The client POSTs one row per completed cycle here; the
+      // summary endpoint exposes last + rolling avg so the page can render
+      // the same "stat cards + recent list" treatment Plates / CameraHealth
+      // already use.
+      //
+      // Table is created lazily on first POST so the demo works on a fresh
+      // Lakebase project without any manual migration.
+      let _spillCyclesTableEnsured = false;
+      const _ensureSpillCyclesTable = async () => {
+        if (_spillCyclesTableEnsured) return;
+        await appkit.lakebase.query(`
+          CREATE TABLE IF NOT EXISTS spill_cycles (
+            id              BIGSERIAL PRIMARY KEY,
+            ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_id       TEXT NOT NULL,
+            spill_first_ts  TIMESTAMPTZ NOT NULL,
+            cone_first_ts   TIMESTAMPTZ NOT NULL,
+            response_ms     INT NOT NULL,
+            was_assisted    BOOLEAN NOT NULL DEFAULT FALSE
+          )
+        `);
+        await appkit.lakebase.query(
+          "CREATE INDEX IF NOT EXISTS idx_spill_cycles_ts ON spill_cycles (ts DESC)",
+        );
+        _spillCyclesTableEnsured = true;
+      };
+
+      app.post("/api/spill-cycles", async (req, res) => {
+        const body = req.body as {
+          source_id?: unknown;
+          spill_first_ts?: unknown;
+          cone_first_ts?: unknown;
+          response_ms?: unknown;
+          was_assisted?: unknown;
+        } | undefined;
+        const source_id = typeof body?.source_id === "string" ? body.source_id : null;
+        const spill_first_ts = typeof body?.spill_first_ts === "string" ? body.spill_first_ts : null;
+        const cone_first_ts = typeof body?.cone_first_ts === "string" ? body.cone_first_ts : null;
+        const response_ms = typeof body?.response_ms === "number" && body.response_ms >= 0
+          ? Math.floor(body.response_ms) : null;
+        const was_assisted = typeof body?.was_assisted === "boolean" ? body.was_assisted : false;
+        if (!source_id || !spill_first_ts || !cone_first_ts || response_ms === null) {
+          res.status(400).json({
+            error: "Body needs source_id, spill_first_ts, cone_first_ts, response_ms.",
+          });
+          return;
+        }
+        try {
+          await _ensureSpillCyclesTable();
+          const result = await appkit.lakebase.query(
+            `INSERT INTO spill_cycles (source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING id`,
+            [source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted],
+          );
+          res.json({ inserted: result.rowCount ?? 0 });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase insert failed: ${message}` });
+        }
+      });
+
+      app.get("/api/spill-cycles/recent", async (req, res) => {
+        const limitRaw = Number(req.query.limit ?? 25);
+        const limit = Number.isFinite(limitRaw)
+          ? Math.min(100, Math.max(1, Math.floor(limitRaw))) : 25;
+        try {
+          await _ensureSpillCyclesTable();
+          const result = await appkit.lakebase.query<{
+            id: number;
+            ts: string;
+            source_id: string;
+            spill_first_ts: string;
+            cone_first_ts: string;
+            response_ms: number;
+            was_assisted: boolean;
+          }>(
+            `SELECT id, ts, source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted
+             FROM spill_cycles
+             ORDER BY ts DESC
+             LIMIT $1`,
+            [limit],
+          );
+          res.json({ rows: result.rows });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase query failed: ${message}` });
+        }
+      });
+
+      app.get("/api/spill-cycles/summary", async (_req, res) => {
+        try {
+          await _ensureSpillCyclesTable();
+          // Avg / min / fastest over the last 50 cycles so a single demo run
+          // doesn't get drowned out by a backlog of slow historical cycles.
+          const result = await appkit.lakebase.query<{
+            cycles: number;
+            avg_response_ms: number | null;
+            min_response_ms: number | null;
+            last_response_ms: number | null;
+            last_ts: string | null;
+          }>(
+            `WITH recent AS (
+               SELECT response_ms, ts
+               FROM spill_cycles
+               ORDER BY ts DESC
+               LIMIT 50
+             )
+             SELECT
+               COUNT(*)::int                                    AS cycles,
+               ROUND(AVG(response_ms))::int                     AS avg_response_ms,
+               MIN(response_ms)::int                            AS min_response_ms,
+               (SELECT response_ms FROM recent ORDER BY ts DESC LIMIT 1) AS last_response_ms,
+               (SELECT ts FROM recent ORDER BY ts DESC LIMIT 1)          AS last_ts
+             FROM recent`,
+          );
+          const row = result.rows[0] ?? {
+            cycles: 0, avg_response_ms: null, min_response_ms: null,
+            last_response_ms: null, last_ts: null,
+          };
+          res.json(row);
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           res.status(500).json({ error: `Lakebase query failed: ${message}` });

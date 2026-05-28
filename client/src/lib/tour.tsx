@@ -231,10 +231,10 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     id: "camera-health",
-    route: "/health",
+    route: "/clarity",
     target: '[data-tour="health-feeds"]',
     placement: "top",
-    title: "Camera health = model health",
+    title: "Camera clarity = model health",
     body: (
       <>
         <p>

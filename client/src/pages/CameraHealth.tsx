@@ -13,7 +13,7 @@ import {
 import { callDetector, type Detection } from "../lib/detector";
 import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 
-// Camera Health view.
+// Camera Clarity view.
 //
 // Two CCTV feeds run the `fog_detector` endpoint in parallel. The detector is
 // a pure-Python PyFunc (Pillow + numpy) that tiles each frame into an 8x6
@@ -470,11 +470,22 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
     const syncVideoSize = () => {
       setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
     };
+    // The browser fires `error` when the URL 404s or the bytes can't be
+    // decoded. Without this handler the status string would hang on
+    // "Loading clip..." forever because `loadedmetadata` never fires.
+    const onError = () => {
+      setStatus("Clip unavailable");
+      setErrorMessage(
+        `Could not load ${sample.name}. The server probably can't reach the sample_videos volume; check that /api/sample-videos/${sample.id} returns 200.`,
+      );
+    };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);
+    video.addEventListener("error", onError);
     return () => {
       video.removeEventListener("loadedmetadata", syncVideoSize);
       video.removeEventListener("resize", syncVideoSize);
+      video.removeEventListener("error", onError);
       video.removeAttribute("src");
       video.load();
     };
