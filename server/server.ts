@@ -10,6 +10,37 @@ import { getServingStatus } from "./serving-status.ts";
 const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
 const VIDEO_CONTENT_TYPE = "video/mp4";
 
+// Local fallback dir for presenter content. In dev we serve directly from
+// docs/ so the inner loop is "save md -> reload page". In prod (Databricks
+// Apps) docs/ is excluded from the source upload (see databricks.yml ->
+// sync.exclude) so the volume always wins.
+const LOCAL_PRESENTER_CONTENT_DIR = resolvePath(process.cwd(), "docs");
+
+// Catalog of booth-presenter content. Each entry is one HTTP-addressable
+// item the InfoPage in the UI knows how to render. Keep this list short -
+// the page is a booth aid, not a docs site. The HTML deck is served as
+// `text/html` (which the auto-mounted /api/files/.../raw route refuses to
+// serve inline for XSS reasons), which is why this lives behind its own
+// route instead of the files plugin's default mount.
+interface PresenterContentDef {
+  filename: string;
+  contentType: string;
+  label: string;
+}
+
+const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
+  "talk-track": {
+    filename: "dais-talk-track.md",
+    contentType: "text/markdown; charset=utf-8",
+    label: "Booth talk track",
+  },
+  "booth-deck": {
+    filename: "booth-deck.html",
+    contentType: "text/html; charset=utf-8",
+    label: "LensIQ booth deck",
+  },
+};
+
 // LensIQ AppKit server.
 //
 // Everything in this app runs as the app's service principal. There is no
@@ -205,6 +236,19 @@ function _decodeImage(image: string): Buffer | null {
 // llm endpoint returns OpenAI-shaped JSON: choices[0].message.content can be
 // either a plain string or an array of content blocks (`type: "text"`). The
 // vision-image variant returns the text block in the array form.
+// Pulls the first {...} JSON object out of an LLM text response. Claude
+// sometimes wraps the answer in ```json fences or prepends an "Output:"
+// label even when the prompt says "no prose". Falling back to the
+// substring between the first '{' and last '}' is more forgiving than
+// JSON.parse on the raw string.
+function _extractJsonObject(raw: string): string {
+  if (!raw) return raw;
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start >= 0 && end > start) return raw.slice(start, end + 1);
+  return raw;
+}
+
 function _extractChatText(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
   const choices = (payload as Record<string, unknown>).choices;
@@ -297,6 +341,68 @@ interface SampleVolume {
     "content-length"?: number;
     "content-type"?: string;
   }>;
+}
+
+// Stream a presenter-content file from the local docs/ dir. Used for the
+// dev inner loop so edits to docs/dais-talk-track.md show up on reload
+// without re-syncing the volume. In prod docs/ is excluded from the app
+// source upload, so this always misses and the volume fallback runs.
+async function _streamLocalPresenterContent(
+  def: PresenterContentDef,
+  res: import("express").Response,
+): Promise<boolean> {
+  const fullPath = resolvePath(LOCAL_PRESENTER_CONTENT_DIR, def.filename);
+  if (!fullPath.startsWith(`${LOCAL_PRESENTER_CONTENT_DIR}/`)) return false;
+  let stats: Awaited<ReturnType<typeof stat>>;
+  try {
+    stats = await stat(fullPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+  if (!stats.isFile()) return false;
+  res.status(200);
+  res.setHeader("Content-Type", def.contentType);
+  res.setHeader("Content-Length", String(stats.size));
+  // The page exposes a "refresh from volume" button, so we want the browser
+  // to revalidate every time it loads the page rather than serve a stale
+  // copy from cache. Booth presenters edit this on the fly.
+  res.setHeader("Cache-Control", "no-store");
+  createReadStream(fullPath).pipe(res);
+  return true;
+}
+
+// Stream a presenter-content file from the UC volume via the files plugin's
+// programmatic API. Runs as the app SP (the volume is mounted with
+// auth: "service-principal"). Returns false on miss so the caller can 404.
+async function _streamVolumePresenterContent(
+  volume: SampleVolume,
+  def: PresenterContentDef,
+  res: import("express").Response,
+): Promise<boolean> {
+  let body: Awaited<ReturnType<SampleVolume["download"]>>;
+  try {
+    body = await volume.download(def.filename);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("FILES_API_FILE_NOT_FOUND") || msg.includes("Not Found")) {
+      return false;
+    }
+    console.warn(`presenter_content download failed for ${def.filename}:`, msg);
+    return false;
+  }
+  if (!body.contents) return false;
+  res.status(200);
+  // Force the catalog-defined content type so the deck (HTML) renders
+  // inline in the iframe instead of triggering a download the way the
+  // auto-mounted /api/files/.../raw route would.
+  res.setHeader("Content-Type", def.contentType);
+  if (typeof body["content-length"] === "number") {
+    res.setHeader("Content-Length", String(body["content-length"]));
+  }
+  res.setHeader("Cache-Control", "no-store");
+  Readable.fromWeb(body.contents as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
+  return true;
 }
 
 // Stream a sample MP4 from the given UC volume handle, running as whatever
@@ -438,6 +544,13 @@ const AppKit = await createApp({
         //   GET /api/files/sample_videos/raw?path=<file>
         // which client/src/lib/samples.ts uses via sampleVideoUrl().
         sample_videos: { policy: files.policy.publicRead() },
+        // Booth talk-track markdown + standalone HTML deck. The
+        // auto-mounted /api/files/presenter_content/raw route refuses to
+        // serve HTML inline (XSS protection) so the InfoPage actually hits
+        // a dedicated /api/presenter-content/:id route below that sets
+        // Content-Type explicitly. The volume is still declared here so
+        // the .download() programmatic API works under the SP identity.
+        presenter_content: { policy: files.policy.publicRead() },
       },
     }),
     // Lakebase Postgres backs persistent app-side state (e.g. guest_counts).
@@ -529,6 +642,56 @@ const AppKit = await createApp({
             models: s.models,
             url: `/api/sample-videos/${s.id}`,
           })),
+        });
+      });
+
+      // ─── Booth presenter content ─────────────────────────────────────
+      //
+      // The InfoPage in the UI renders two artifacts the booth presenter
+      // edits independently of the rest of the app: the talk track
+      // (markdown) and a standalone HTML deck. Both live in the
+      // `presenter_content` UC volume so they can be refreshed by
+      // re-running scripts/sync-presenter-content.sh - no app redeploy.
+      //
+      // Resolution order on each GET /api/presenter-content/:id:
+      //   1. Local docs/<filename> on disk (dev inner loop).
+      //   2. presenter_content volume via the files plugin (.download()).
+      //   3. 404.
+      //
+      // Content-Type is set per-item from PRESENTER_CONTENT - in particular
+      // the deck is served as text/html so the InfoPage iframe renders it
+      // inline. The AppKit auto-mounted /raw route deliberately refuses
+      // HTML for stored-XSS reasons, which is why this lives behind a
+      // dedicated route.
+
+      app.get("/api/presenter-content", (_req, res) => {
+        res.json({
+          items: Object.entries(PRESENTER_CONTENT).map(([id, def]) => ({
+            id,
+            filename: def.filename,
+            contentType: def.contentType,
+            label: def.label,
+            url: `/api/presenter-content/${id}`,
+          })),
+        });
+      });
+
+      app.get("/api/presenter-content/:id", async (req, res) => {
+        const def = PRESENTER_CONTENT[req.params.id];
+        if (!def) {
+          res.status(404).json({ error: `Unknown presenter content id: ${req.params.id}` });
+          return;
+        }
+        try {
+          if (await _streamLocalPresenterContent(def, res)) return;
+          if (await _streamVolumePresenterContent(appkit.files("presenter_content"), def, res)) return;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Presenter content stream failed: ${message}` });
+          return;
+        }
+        res.status(404).json({
+          error: `${def.filename} not found locally or in the presenter_content volume.`,
         });
       });
 
@@ -733,10 +896,27 @@ const AppKit = await createApp({
       });
 
       // License plate OCR. The Plates page sends a cropped image (typically
-      // the bbox region returned by the Roboflow license_plate detector). We
-      // forward it to the llm endpoint as a Claude vision chat completion
-      // and return the extracted text. Kept deliberately small (max 24 tokens,
-      // temperature 0) so the model doesn't editorialize - just the chars.
+      // the bbox region returned by the YOLO vehicle detector). We forward
+      // it to the llm endpoint as a Claude vision chat completion and
+      // return both the extracted text and a tight plate bbox.
+      //
+      // Why this is a prompt-driven contract rather than `response_format`
+      // + json_schema (Databricks structured outputs):
+      //   1. AppKit's serving plugin filters request bodies against the
+      //      typed `QueryEndpointInput` allowlist before invoking the
+      //      endpoint. `response_format` isn't in that allowlist, so it
+      //      gets silently stripped (`appkit:serving:schema-filter:
+      //      Stripped unknown params from 'llm': response_format`) and
+      //      the schema never reaches the model.
+      //   2. `temperature` is on the typed allowlist but the Opus 4.7
+      //      foundation model rejects it outright with
+      //      "Model us.anthropic.claude-opus-4-7 does not support the
+      //      temperature parameter".
+      // So we go back to first principles: a tight prompt that names
+      // the schema and shows one worked example. Claude follows the
+      // example reliably enough that the plate bbox comes through on
+      // the overwhelming majority of reads; when it doesn't, the
+      // client falls back to the full OCR crop with no apology.
       app.post("/api/plate-ocr", async (req, res) => {
         const body = req.body as { image?: unknown } | undefined;
         const image = typeof body?.image === "string" ? body.image : null;
@@ -745,19 +925,16 @@ const AppKit = await createApp({
           return;
         }
         const dataUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
-        // We ask Claude for two things at once:
-        //   1. The plate text (alphanumeric chars only).
-        //   2. A normalized [0,1] bbox around the plate within the supplied
-        //      image so the client can render a tight overlay on the plate
-        //      instead of the whole vehicle.
-        // Response format is JSON only so we can parse without regex tricks.
         const prompt = [
-          "You're a license plate OCR helper looking at a still image from a security camera.",
-          "Find the license plate in this image and read the characters printed on it.",
-          "Respond with a single line of JSON exactly matching this schema and nothing else:",
+          "You are a license plate OCR helper looking at a still image from a security camera.",
+          "Two outputs are required: the alphanumeric plate text AND a tight rectangle around the plate. Both fields are mandatory whenever a plate is visible.",
+          "Respond with a single line of minified JSON, no prose, no markdown fences, exactly matching this schema:",
           '{"plate":"<chars>","bbox":[x1,y1,x2,y2]}',
-          "where <chars> is the alphanumeric plate text (uppercased, no spaces or punctuation, jurisdiction text and slogans excluded), and bbox is the plate location as normalized fractions of the image dimensions (each value between 0 and 1, x1<x2, y1<y2).",
-          'If you cannot identify the plate at all, respond with: {"plate":"UNREADABLE","bbox":null}',
+          "Field rules:",
+          '  - "plate" is the alphanumeric plate text: uppercase, no spaces, no punctuation, no jurisdiction text or slogans.',
+          '  - "bbox" is the location of the plate within the supplied image expressed as normalized fractions of the image width/height. Each value is a decimal between 0 and 1, with x1<x2 and y1<y2. (x1,y1) is the top-left corner, (x2,y2) is the bottom-right corner. License plates are usually a horizontal strip in the lower third of a rear-of-vehicle shot, so y values are typically > 0.4 and the strip is wider than it is tall.',
+          'Example (a US plate "7ABC123" near the middle-bottom of a 4:3 image): {"plate":"7ABC123","bbox":[0.32,0.62,0.71,0.78]}',
+          'If and only if no plate is visible at all, respond with: {"plate":"UNREADABLE","bbox":null}',
         ].join(" ");
         try {
           const result = (await appkit.serving("llm").invoke({
@@ -770,36 +947,38 @@ const AppKit = await createApp({
                 ],
               },
             ],
-            max_tokens: 80,
+            // 160 tokens is plenty of headroom for the minified JSON
+            // response plus its worked-example shape (~50-70 tokens
+            // in practice). 80 was too tight - we occasionally lost
+            // the closing brace and dropped the bbox.
+            max_tokens: 160,
           })) as { ok: boolean; status?: number; message?: string; data?: unknown };
           if (!result.ok) {
             res.status(result.status ?? 502).json({ error: result.message ?? "OCR failed" });
             return;
           }
+          // Defensive parser: Claude sometimes wraps JSON in ```json fences
+          // despite the prompt, and occasionally prepends a stray newline
+          // or `Output:`. Strip those before JSON.parse so the bbox
+          // survives the round trip.
           const raw = _extractChatText(result.data).trim();
-          // Try to parse the JSON. Be lenient about leading/trailing chars
-          // (e.g. accidental ```json fences).
-          const jsonStart = raw.indexOf("{");
-          const jsonEnd = raw.lastIndexOf("}");
+          const jsonText = _extractJsonObject(raw);
           let plateText: string | null = null;
           let plateBbox: [number, number, number, number] | null = null;
-          if (jsonStart >= 0 && jsonEnd > jsonStart) {
-            try {
-              const parsed = JSON.parse(raw.slice(jsonStart, jsonEnd + 1)) as { plate?: unknown; bbox?: unknown };
-              if (typeof parsed.plate === "string") {
-                const cleaned = parsed.plate.replace(/[^A-Z0-9]/gi, "").toUpperCase();
-                if (cleaned.length >= 3 && cleaned !== "UNREADABLE") plateText = cleaned;
-              }
-              if (Array.isArray(parsed.bbox) && parsed.bbox.length === 4 && parsed.bbox.every((v) => typeof v === "number")) {
-                const [x1, y1, x2, y2] = parsed.bbox as number[];
-                if (x1 >= 0 && y1 >= 0 && x2 <= 1 && y2 <= 1 && x1 < x2 && y1 < y2) {
-                  plateBbox = [x1, y1, x2, y2];
-                }
-              }
-            } catch {
-              // Fall through with nulls - the raw value still goes back so
-              // the UI can show why a read was dropped.
+          try {
+            const parsed = JSON.parse(jsonText) as { plate?: unknown; bbox?: unknown };
+            if (typeof parsed.plate === "string") {
+              const cleaned = parsed.plate.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+              if (cleaned.length >= 3 && cleaned !== "UNREADABLE") plateText = cleaned;
             }
+            if (Array.isArray(parsed.bbox) && parsed.bbox.length === 4 && parsed.bbox.every((v) => typeof v === "number")) {
+              const [x1, y1, x2, y2] = parsed.bbox as number[];
+              if (x1 >= 0 && y1 >= 0 && x2 <= 1 && y2 <= 1 && x1 < x2 && y1 < y2) {
+                plateBbox = [x1, y1, x2, y2];
+              }
+            }
+          } catch {
+            // Fall through with nulls; raw still goes back for debugging.
           }
           res.json({
             plate_text: plateText,
@@ -813,11 +992,49 @@ const AppKit = await createApp({
         }
       });
 
+      // Lakebase table backing the Plates page. The DDL lives here (rather
+      // than a separate migration step) for the same reason fog_observations
+      // and spill_cycles do - the app owns these tables and we want a fresh
+      // workspace to come up clean without out-of-band SQL. The
+      // ADD COLUMN IF NOT EXISTS rider is so older deployments (which
+      // created the table without `plate_image`) pick up the new column
+      // automatically on next boot.
+      let _plateReadsTableEnsured = false;
+      const _ensurePlateReadsTable = async (): Promise<void> => {
+        if (_plateReadsTableEnsured) return;
+        await appkit.lakebase.query(`
+          CREATE TABLE IF NOT EXISTS plate_reads (
+            id                   BIGSERIAL PRIMARY KEY,
+            ts                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_id            TEXT NOT NULL,
+            plate_text           TEXT NOT NULL,
+            confidence           REAL NOT NULL,
+            ocr_model            TEXT,
+            detection_confidence REAL,
+            plate_image          TEXT
+          )
+        `);
+        // Add the column on existing deployments where the table predates
+        // the image-capture feature. Postgres treats this as a no-op when
+        // the column is already present.
+        await appkit.lakebase.query(
+          "ALTER TABLE plate_reads ADD COLUMN IF NOT EXISTS plate_image TEXT",
+        );
+        await appkit.lakebase.query(
+          "CREATE INDEX IF NOT EXISTS idx_plate_reads_ts ON plate_reads (ts DESC)",
+        );
+        _plateReadsTableEnsured = true;
+      };
+
       // Persist a plate read from the client (after OCR). Separate from
       // /api/plate-ocr so the client can batch successful reads even if the
       // OCR happens at a different cadence than the persistence flush.
+      // The `plate_image` field is the cropped plate region as a data URL
+      // (or the full OCR crop when Claude didn't return a bbox) so the
+      // Plates page and any downstream consumers can replay what the OCR
+      // model actually saw.
       app.post("/api/plate-reads", async (req, res) => {
-        const body = req.body as { batch?: Array<{ source_id?: unknown; plate_text?: unknown; confidence?: unknown; ocr_model?: unknown; detection_confidence?: unknown }> } | undefined;
+        const body = req.body as { batch?: Array<{ source_id?: unknown; plate_text?: unknown; confidence?: unknown; ocr_model?: unknown; detection_confidence?: unknown; plate_image?: unknown }> } | undefined;
         const batch = Array.isArray(body?.batch) ? body!.batch : null;
         if (!batch || batch.length === 0) {
           res.status(400).json({ error: "Body must include non-empty `batch`." });
@@ -835,16 +1052,23 @@ const AppKit = await createApp({
           const confidence = typeof row.confidence === "number" && row.confidence >= 0 ? row.confidence : null;
           const ocr_model = typeof row.ocr_model === "string" ? row.ocr_model : null;
           const det_conf = typeof row.detection_confidence === "number" ? row.detection_confidence : null;
+          // Defensive cap on data URL size so a misbehaving client can't
+          // wedge the postgres row size limit. ~750KB is well above a
+          // legitimate plate crop (~10-30KB) but below TOAST's 1MB inline
+          // threshold so the row still stays compact.
+          const plate_image_raw = typeof row.plate_image === "string" ? row.plate_image : null;
+          const plate_image = plate_image_raw && plate_image_raw.length <= 750_000 ? plate_image_raw : null;
           if (!source_id || !plate_text || confidence === null) {
             res.status(400).json({ error: "Each row needs source_id, plate_text, confidence." });
             return;
           }
           const base = params.length;
-          params.push(source_id, plate_text, confidence, ocr_model, det_conf);
-          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
+          params.push(source_id, plate_text, confidence, ocr_model, det_conf, plate_image);
+          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
         }
-        const stmt = `INSERT INTO plate_reads (source_id, plate_text, confidence, ocr_model, detection_confidence) VALUES ${placeholders.join(", ")}`;
+        const stmt = `INSERT INTO plate_reads (source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image) VALUES ${placeholders.join(", ")}`;
         try {
+          await _ensurePlateReadsTable();
           const result = await appkit.lakebase.query(stmt, params);
           res.json({ inserted: result.rowCount ?? 0 });
         } catch (err) {
@@ -857,8 +1081,9 @@ const AppKit = await createApp({
         const limitRaw = Number(req.query.limit ?? 50);
         const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
         try {
-          const result = await appkit.lakebase.query<{ id: number; ts: string; source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null }>(
-            "SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence FROM plate_reads ORDER BY ts DESC LIMIT $1",
+          await _ensurePlateReadsTable();
+          const result = await appkit.lakebase.query<{ id: number; ts: string; source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null; plate_image: string | null }>(
+            "SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image FROM plate_reads ORDER BY ts DESC LIMIT $1",
             [limit],
           );
           res.json({ rows: result.rows });

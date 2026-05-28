@@ -17,3 +17,15 @@ resources:
       name: sample_videos
       volume_type: MANAGED
       comment: Demo MP4s streamed to the lens-iq app via the AppKit files plugin.
+    # Booth-presenter content: the talk-track markdown and the standalone HTML
+    # deck. Mirrors `docs/dais-talk-track.md` and `docs/booth-deck.html` from
+    # the repo. The app reads from this volume at runtime so the narrative
+    # can be refreshed without redeploying. scripts/sync-presenter-content.sh
+    # pushes the bytes here; the volume itself is bundle-owned so
+    # `databricks bundle deploy` (re-)creates it idempotently.
+    presenter_content:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: presenter_content
+      volume_type: MANAGED
+      comment: Booth talk-track markdown and HTML deck served by the LensIQ app at runtime.

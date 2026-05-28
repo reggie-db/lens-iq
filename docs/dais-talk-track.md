@@ -49,48 +49,117 @@ That math has changed.
 
 ## Section 2 - SHOW: walk the app
 
-Three stops. Total time on this section: about four minutes. The point is
-that the audience sees footage become a row, a row become an alert, and an
-alert become an action - in seconds.
+Five stops, each is its own purpose-built model on its own serving endpoint.
+Total time on this section: about five minutes. The point is that the
+audience sees footage become a row, a row become an alert, and an alert
+become a dollar figure - in seconds. Pick the two or three stops that fit
+the badge in front of you.
 
 ### Stop 1: Live Detection (`/live`)
 
 What to do:
 1. Click **Live Detection** in the sidebar.
 2. Pick a sample clip (or the webcam at the booth).
-3. Let the bounding boxes start painting.
+3. Cycle the **Detector** dropdown to show a couple of specialty models -
+   YOLO, spill, license plate, fog detector - against the same source.
 
 What to say:
 > "This is the same footage your stores already record. The difference is
-> that every frame is being scored by a model right now. Spill, slip,
-> license plate, person at the pump, PPE - any of it. Each model runs
-> independently, so the team responsible for safety doesn't share a release
-> cycle with the team responsible for loyalty."
+> that every frame is being scored by a model right now. Every use case you
+> see in the sidebar - spill, plate, guest count, camera health - is its
+> own serving endpoint. Each one scales to zero independently. The team
+> responsible for safety doesn't share a release cycle with the team
+> responsible for loyalty."
 
 Why this matters to the buyer:
 - One platform, many use cases. They don't pick a vendor per problem.
 - The models scale to zero between events. They pay for inference, not for
   idle GPUs.
 
-### Stop 2: Live activity from the lake (`/detections` or `/alerts`)
+### Stop 2: Spill Detection (`/spills`)
+
+What to do:
+1. Click **Spill Detection**. Let the canonical aisle clip play.
+2. Watch the spill bbox light up. Click **Place cone** at 0:27.
+3. Point at the "Current response" stopwatch flipping to a millisecond
+   delta when the cone enters frame.
+
+What to say:
+> "Spill at second one. Cone at second 27. The model just measured your
+> time-to-cone *as a number you can put on a dashboard*. Mid-five-figure
+> slip-and-fall claim averages, an insurance carrier that wants proof you
+> responded, and a regional VP who can finally answer 'which stores are
+> slow?' - all from one row in Lakebase. The fastest, last, and average
+> response cards in the corner are reading directly out of Postgres."
+
+### Stop 3: License Plates (`/plates`)
+
+What to do:
+1. Click **License Plates**. Let YOLO start boxing vehicles.
+2. Watch the "reading..." overlay flip to actual plate text as Claude
+   vision returns the OCR result.
+3. Point at the "Recent plates" list in the right column - those are rows
+   coming back out of Lakebase.
+
+What to say:
+> "Two models in one loop. YOLO finds the vehicle, Claude vision crops the
+> bumper and reads the digits. Each plate is read exactly once per visit
+> - we're not paying for OCR every frame. Drive-off prevention, drive-thru
+> SLA per car, fleet recognition for a B2B account, repeat-customer pings
+> for a loyalty manager - same row, four different audiences."
+
+### Stop 4: Guest Counts (`/guests`)
+
+What to do:
+1. Click **Guest Counts**. Two CCTV feeds (forecourt + c-store) light up
+   side by side.
+2. Point at the three cards: pump users, pump cars, in-store.
+3. Scroll down to the "Activity over time" chart - lines coming back out
+   of Lakebase, 30-second buckets, last 10 minutes.
+
+What to say:
+> "Three running totals, one chart. We're counting people on the forecourt,
+> cars at the pumps, and people in the c-store - all in parallel, from
+> separate cameras, on the same screen. The numbers you see going up are
+> unique tracks, not raw detections, so we're not double-counting the
+> same person on three consecutive frames. Divide in-store by pump users
+> and you have your **canopy-to-store conversion rate** - the denominator
+> a fuel chain has never had until now."
+
+### Stop 5: Camera Clarity (`/clarity`)
+
+What to do:
+1. Click **Camera Clarity**. Camera A (the clear baseline) sits green.
+   Camera B (the foggy lens) flashes red after a few ticks.
+2. Point at the "Cleaning tickets opened" card incrementing.
+3. Show the side-by-side fog coverage chart.
+
+What to say:
+> "Every loss-prevention model in this building only works as well as the
+> camera it's looking through. A smudged dome cam in a freezer aisle is
+> invisible to your spill model and your shoplifter model and your
+> people-counter. This is the diagnostic layer that *watches the
+> watchers*. It's a tiny Pillow + numpy PyFunc, no GPU, that flags the
+> camera *before* downstream models silently miss things. Sustained fog
+> opens a cleaning ticket. The same governance, same Lakebase row stream."
+
+### Stop 6: Live activity from the lake (`/detections` or `/alerts`)
 
 What to do:
 1. Click **Detections** (or **Alerts**).
-2. Point at the rows streaming in from the camera demo you just did.
+2. Point at the rows streaming in from the demos you just ran.
 
 What to say:
-> "What you just saw on the video isn't a screenshot. It's a row in a
+> "What you just saw on the videos isn't a screenshot. It's a row in a
 > **Delta** table. The frame itself, the detection, the model version that
 > produced it - all of it lands in Unity Catalog with ACID guarantees, the
-> same place your finance, supply chain, and HR data live. Thousands of
-> cameras can be writing at once, your enrichment pipeline can be reading
-> the same table, and nobody steps on anyone's toes."
+> same place your finance, supply chain, and HR data live."
 
-> "Then the gold layer of that pipeline writes into **Lakebase Postgres** -
-> the operational database this app reads and writes back to. That's why
-> the supervisor's tap-to-acknowledge is millisecond-fast even at scale,
-> and why the same incident row is queryable in Postgres *and* in the lake
-> for tomorrow's report."
+> "Then the gold layer writes into **Lakebase Postgres** - the operational
+> database this app reads and writes back to. That's why the supervisor's
+> tap-to-acknowledge is millisecond-fast even at scale, and why the same
+> incident row is queryable in Postgres *and* in the lake for tomorrow's
+> report."
 
 Why this matters to the buyer:
 - They were going to buy a separate computer-vision system that wrote to
@@ -102,7 +171,7 @@ Why this matters to the buyer:
 - Audit, retention, redaction, and PII rules they already wrote for the
   rest of the business apply to footage too.
 
-### Stop 3: Composability (`/trends` or `/overview`)
+### Stop 7: Composability (`/trends` or `/overview`)
 
 What to do:
 1. Click **Trends** or **Overview**.
@@ -114,11 +183,7 @@ What to say:
 > English, and the weekly executive report. One source of truth - four
 > interfaces - no duplicated pipelines."
 
-Why this matters to the buyer:
-- They have asked their data team for "one number" for years. Footage
-  finally rolls up into the same number everyone else is using.
-
-### Stop 4: Talk to the data with Genie
+### Stop 8: Talk to the data with Genie
 
 What to do:
 1. Open the Genie panel (or the AI chat button in the corner).
@@ -127,15 +192,16 @@ What to do:
    - *"What was the average time-to-cone yesterday, by shift?"*
    - *"Show me unique license plates that visited more than three of our
      locations this month."*
+   - *"Which cameras have been fogged more than 20% of the time this week?"*
 
 What to say:
 > "Once your footage is rows in Delta, your analysts don't have to learn a
 > new tool to use it. **Genie** is a natural-language interface over the
-> exact same tables you saw on Detections and Trends. The CFO can ask the
-> question they were going to email the data team. The regional VP can
-> compare stores without opening a BI tool. Your loss prevention lead can
-> pull a list of repeat plate offenders without writing SQL. Every
-> detection the camera produced is a number an analyst can talk to."
+> exact same tables you saw on every page. The CFO can ask the question
+> they were going to email the data team. The regional VP can compare
+> stores without opening a BI tool. Your loss prevention lead can pull a
+> list of repeat plate offenders without writing SQL. Every detection the
+> camera produced is a number an analyst can talk to."
 
 Why this matters to the buyer:
 - The biggest cost of a CV system isn't the cameras or the models - it's
@@ -144,12 +210,184 @@ Why this matters to the buyer:
 - Genie reads the same Unity Catalog governance you've already configured
   - row-level security, column masks, audit log. Analysts get the data
   they're allowed to see, not more.
-- The same Delta tables also power your existing AI/BI dashboards and the
-  agents your data team is building. Nothing forks.
 
 ---
 
-## Section 3 - TELL: the unlock is zerobus, Delta, and Lakebase
+## Section 3 - Use case deep dive (one slide per detector)
+
+This is the section to lean on when a customer asks **"what does each
+model actually do for me?"**. Each use case is a separate serving endpoint,
+versioned and scaled independently, persisted to Lakebase, and queryable
+from Genie. Lead with the dollar number, not the model name.
+
+### 3.1 - Spill detection (`/spills`)
+
+What the model sees:
+- Two detectors running on the same frame: **spill** (liquid on the floor)
+  and **wet_floor_sign** (yellow caution cone).
+- The app stamps a wall-clock delta between the first spill detection and
+  the first cone detection of each cycle. That delta is the metric.
+
+What the operator gets:
+- A live stopwatch from spill-to-cone, per camera, per store.
+- A rolling fleet KPI: **last response**, **average across last 50**,
+  **fastest in window** - reading straight out of Lakebase.
+- An audit row per cycle with both timestamps, the source clip, and
+  whether the cone arrived organically or by operator override.
+
+Business value, in the customer's words:
+- **Insurance and liability.** The average slip-and-fall claim is mid-five
+  figures, before legal. A timestamped row showing "spill detected, cone
+  deployed in 73 seconds" is what the carrier wants in discovery. One
+  avoided claim per region per year pays for the platform.
+- **Coaching, not blame.** Time-to-cone is a coaching metric by shift and
+  store, not a punitive write-up. The conversation goes from "did anyone
+  see the spill on Friday?" to "your Tuesday closing crew is averaging
+  4 minutes, the chain average is 90 seconds - what do they need?"
+- **Carrier-defensible audit trail.** Same row in Delta, same row in
+  Lakebase, same row your insurance broker queries quarterly. No PDFs.
+
+Where this lands hardest: **QSR, grocery, c-store, hotels, stadiums.**
+
+### 3.2 - License plate recognition (`/plates`)
+
+What the model sees:
+- YOLO finds vehicles (car, truck, bus, motorcycle). A centroid tracker
+  gives each vehicle a stable id across frames so we don't OCR the same
+  plate every tick.
+- When a new track appears, the vehicle crop goes to a vision LLM
+  (Claude via Foundation Model APIs) which extracts the plate text plus
+  a tight bbox in one call.
+- The read is persisted to Lakebase with timestamp, source camera, and
+  the OCR model version.
+
+What the operator gets:
+- A live feed with each vehicle box flipping from "reading..." to the
+  actual plate text the moment OCR returns.
+- A recent-reads panel sourced from Lakebase, refreshing every five
+  seconds.
+- Session totals (reads, unique plates, vehicles in frame) so a manager
+  can sanity-check the camera before the next shift.
+
+Business value, in the customer's words:
+- **Drive-off prevention at the fuel pump.** For some chains this single
+  line item pays for the whole platform in a quarter. Plate captured at
+  arrival, transaction joined at the POS, missing transactions surface
+  as exceptions.
+- **Drive-thru SLA, per order, not per car.** Plate is the join key. You
+  finally measure speed of service for *this customer's order*, not "the
+  red car at the window."
+- **Loyalty without an app or punch card.** Plate comes in, manager gets a
+  Slack ping with the lifetime visit count, customer gets a free coffee.
+  Loyalty conversion goes up without changing checkout.
+- **Fleet and B2B recognition.** Same logic, applied to repeat commercial
+  vehicles - a hotel can pre-stage a regular's room, a c-store can flag
+  a vendor truck for the back dock.
+
+Where this lands hardest: **convenience and fuel, hotels, parking,
+drive-thru QSR, fleet operators.**
+
+### 3.3 - Guest and vehicle counts (`/guests`)
+
+What the model sees:
+- Two CCTV feeds run YOLO in parallel: a forecourt camera and an
+  in-store interior camera.
+- Each detection is filtered into three buckets: **pump_users**
+  (people on the forecourt), **pump_cars** (vehicles on the forecourt),
+  **in_store** (people inside).
+- A centroid tracker per bucket converts raw bounding boxes into
+  **unique tracks** so a person standing at a pump for thirty seconds
+  contributes one, not thirty.
+- Per-tick counts are streamed to Lakebase in five-second batches.
+
+What the operator gets:
+- Current totals on premises **right now**, plus cumulative since the
+  shift started.
+- A time-series chart of average bucket counts per zone over the last
+  ten minutes, read back from Postgres.
+- A clean denominator for any conversion math the chain wants to do.
+
+Business value, in the customer's words:
+- **The denominator a fuel chain has never had.** Canopy traffic up but
+  in-store basket flat? Now you know which store, which shift. The
+  pump-to-store conversion ratio is the lever every CMO has been asking
+  for.
+- **Staffing that matches the floor, not the schedule.** Queue forming at
+  the register? Add a cashier *before* NPS drops, not at the Monday
+  staffing review.
+- **Marketing attribution that survives audit.** "Our coupon drove a 14%
+  lift in canopy traffic" is a defensible claim when the camera counted
+  it.
+- **Concession throughput per section** for stadiums and venues -
+  rebalance staff in real time instead of guessing from POS lag.
+
+Where this lands hardest: **fuel and c-store, QSR, stadiums and venues,
+hotels, big-box retail.**
+
+### 3.4 - Camera clarity / fog detection (`/clarity`)
+
+What the model sees:
+- Every camera is tiled into an 8x6 grid each tick. A Laplacian variance
+  (sharpness proxy) plus mean brightness scores each patch.
+- Connected patches that flunk the sharpness threshold become a
+  **fogged** bounding box. A clear frame returns a single full-frame
+  `clear` detection that we deliberately don't paint.
+- Sustained-fog runs (three consecutive ticks) cross the threshold for
+  an "incident" - a cleaning ticket - so a one-frame reflection doesn't
+  spam the queue.
+
+What the operator gets:
+- A side-by-side of every monitored camera with a green / yellow / red
+  verdict pill.
+- **Cleaning tickets opened** counter on the page, plus a fog-coverage
+  time-series chart per camera, read from Lakebase.
+- A "recent fog events" feed of which camera and how much of its frame
+  was obscured.
+
+Business value, in the customer's words:
+- **Quality gate on every other model on the platform.** A smudged dome
+  camera is invisible to your spill detector, your shoplifter model, and
+  your people-counter. The fog detector is the diagnostic that keeps the
+  rest of the platform honest. It's the difference between **"the camera
+  is offline"** (which you already monitor) and **"the camera is on but
+  blind"** (which you don't).
+- **Asset preservation without a maintenance contract.** Cleaning tickets
+  fire on actual lens degradation, not on a quarterly checklist. The
+  janitor walks past the camera that *needs* a wipe, not all 40.
+- **Trustable downstream metrics.** When a regional VP asks "why was our
+  shrink number off last week?", "because half our LP cameras were
+  fogged" is a defensible answer with a row to back it up.
+- **No GPU, no API cost.** Pure Pillow + numpy. The cheapest detector on
+  the platform watches every other model. Runs on every camera the
+  customer owns, every tick, for pennies.
+
+Where this lands hardest: **grocery freezer/cooler aisles, outdoor PTZ
+fleets, gas-station canopy cameras, any chain with thousands of cameras
+under one maintenance team.**
+
+### 3.5 - Slip and fall, PPE, age-gate (Live page specialty models)
+
+These ship as additional endpoints on the **Live** page detector
+dropdown. Same Delta + Lakebase plumbing as the headline use cases. Pull
+these out when the badge in front of you matches.
+
+- **Slip & fall (`slip_fall`).** Detects standing vs fallen persons.
+  Pair with the spill model so the carrier has both the hazard *and*
+  the incident timestamped on the same row. QSR, grocery, hotels.
+- **PPE / hard hat (`hard_hat`).** Detects helmet compliance on
+  back-of-house or industrial lines. Weekly coaching trend, not a
+  punitive write-up. Manufacturing, distribution, fuel back-of-house.
+- **Cigarette / vape (`cigarette_vape`).** Loss-prevention model for
+  age-gated areas in a c-store. Flags activity near the counter so the
+  manager can intervene without watching the camera live.
+
+The talk track for these is identical to spill: it's a model on its own
+endpoint, every detection lands in Delta and Lakebase, Genie can ask
+questions in English. The customer gets a model, not a stack.
+
+---
+
+## Section 4 - TELL: the unlock is zerobus, Delta, and Lakebase
 
 This is the recap. Spend 60 seconds here. Don't pivot back to features.
 Three pieces, in the order data flows.
@@ -191,42 +429,51 @@ The slogan to leave them with:
 
 ---
 
-## Section 4 - Outcomes by vertical
+## Section 5 - Outcomes by vertical
 
 Pick the ones that match the badge in front of you. Lead with the dollar
-figure, not the model.
+figure, not the model. Cross-reference Section 3 for the model that
+unlocks each outcome.
 
 ### Quick-serve and casual dining
 
-- **Time-to-cone on a spill** under 90 seconds, with an audit trail your
-  insurance carrier will accept. Slip-and-fall claims average mid-five
-  figures per incident.
-- **Drive-thru SLA** measured per order, not per car at the window.
-  Coaches by shift, not by store, with the camera evidence to back it.
+- **Time-to-cone on a spill** under 90 seconds (Section 3.1), with an
+  audit trail your insurance carrier will accept. Slip-and-fall claims
+  average mid-five figures per incident.
+- **Drive-thru SLA** measured per order, not per car at the window
+  (Section 3.2). Coaches by shift, not by store, with the camera
+  evidence to back it.
 - **PPE and food-safety compliance** as a weekly coaching trend, not a
-  punitive write-up.
+  punitive write-up (Section 3.5).
 
 ### Convenience and fuel
 
-- **People-to-pump-to-store conversion**. The denominator the chain has
-  never had. If your canopy traffic is up but your in-store basket isn't,
-  you finally know it - and you know which store, which shift.
-- **Pump-island fraud and drive-offs**. For some chains this single line
-  item pays for the whole platform in a quarter.
-- **Repeat-customer recognition** without an app or a punch card. Plate
-  comes in, manager gets a Slack ping, customer gets a free coffee.
+- **People-to-pump-to-store conversion** (Section 3.3). The denominator
+  the chain has never had. If your canopy traffic is up but your
+  in-store basket isn't, you finally know it - and you know which store,
+  which shift.
+- **Pump-island fraud and drive-offs** (Section 3.2). For some chains
+  this single line item pays for the whole platform in a quarter.
+- **Repeat-customer recognition** without an app or a punch card
+  (Section 3.2). Plate comes in, manager gets a Slack ping, customer
+  gets a free coffee.
+- **Camera health on the canopy and freezer aisle** (Section 3.4). The
+  freezer dome cam that fogs over every winter is the same camera your
+  LP team relies on. Catch it before the model misses a theft.
 
 ### Travel, hospitality, and stadiums
 
-- **Queue management** at check-in, gate, and concessions. Move staff
-  before the line breaks an NPS threshold, not after.
+- **Queue management** at check-in, gate, and concessions (Section 3.3).
+  Move staff before the line breaks an NPS threshold, not after.
 - **Asset and incident detection** in lobbies, lots, and back-of-house -
-  unattended bags, slips, smoke, after-hours presence.
-- **Loyalty and VIP detection** at the front door, not at the POS.
+  unattended bags, slips (Section 3.5), smoke, after-hours presence.
+- **Loyalty and VIP detection** at the front door, not at the POS
+  (Section 3.2).
 
 ### Stadium, venues, and live events
 
-- **Per-section concession throughput** to rebalance staff in real time.
+- **Per-section concession throughput** to rebalance staff in real time
+  (Section 3.3).
 - **Crowd density and egress** monitoring with alerts to operations.
 - **Lost-and-found and incident response** with timestamped, queryable
   footage instead of a binder.
@@ -238,7 +485,7 @@ A single sentence to anchor any of these:
 
 ---
 
-## Section 5 - The close (30 seconds)
+## Section 6 - The close (30 seconds)
 
 > "If your team has built a computer-vision proof of concept in the last
 > two years, they spent most of it on plumbing - moving footage, hosting
@@ -253,7 +500,7 @@ Three offers, in order of commitment:
    the same loop running on your frames within a workshop.
 2. **A free Databricks demo workspace** preloaded with this code so your
    team can poke at it.
-3. **A scoped pilot.** Pick one outcome from Section 4 - usually spill
+3. **A scoped pilot.** Pick one outcome from Section 3 - usually spill
    response or drive-thru SLA for QSR, conversion or fraud for fuel - and
    we run it end to end in a single store.
 
@@ -268,15 +515,16 @@ the booth, not the opening pitch.
 Most CV vendors give you their dashboard. We give you rows in your lake.
 That difference is what lets your finance, ops, and loyalty teams use the
 same numbers - and what lets you swap the model without swapping the
-platform.
+platform. Each use case in Section 3 is a separate endpoint you can turn
+on, off, or version on its own.
 
 **"What does it cost to run?"**
-Three line items, all elastic: model serving, the operational write-back
-database (Lakebase Postgres), and Delta storage for whichever frames you
-choose to keep. Models and the database scale to zero between events.
+Three line items, all elastic: model serving (one endpoint per use case,
+scale to zero between events), the operational write-back database
+(Lakebase Postgres), and Delta storage for whichever frames you choose to
+keep. The fog detector (Section 3.4) is pure CPU and runs for pennies.
 Most customers persist only the frames around an alert, so storage is
-small. Delta's time-travel and Z-ordering keep the working set tight even
-when you do persist everything.
+small.
 
 **"What happens when a thousand cameras write at once?"**
 Delta handles concurrent writes by design - the lake is the buffer.
@@ -300,12 +548,16 @@ already write it.
 **"What happens if a model is wrong?"**
 You see the detection in the same row stream the operator does, with the
 frame attached. Wrong detections are a labelled-data set, not a support
-ticket. Your team's next model train uses them.
+ticket. Your team's next model train uses them. The fog detector
+(Section 3.4) also tells you when a model is being asked to see through
+a smudged lens, which closes the loop on "is this a model bug or a
+camera bug?"
 
 **"Can we bring our own model?"**
 Yes. Any MLflow model goes in Unity Catalog and serves on the same
 endpoint pattern. You get versioning, RBAC, and a cost line per model out
-of the box.
+of the box. Every detector you saw in Section 3 is exactly that - we
+just shipped them with the demo.
 
 **"How fast is the ingest?"**
 Sub-second from camera to lake on Zerobus. The bottleneck is the store
@@ -347,20 +599,45 @@ Cameras / mobile / edge -- Zerobus -->  Delta bronze in Unity Catalog
 One bundle. One workspace. One bill. Delta is the durable spine, Lakebase
 is the operator path, Zerobus is the on-ramp.
 
+### Model endpoints in the bundle
+
+| Demo page         | Model id          | Serving endpoint       | What it does                                                  |
+| ----------------- | ----------------- | ---------------------- | ------------------------------------------------------------- |
+| Live              | `yolo`            | `lensiq-detector`      | General-purpose YOLOv8: people, vehicles, products            |
+| Spills            | `spill`           | `lensiq-spill`         | Liquid on the floor                                           |
+| Spills            | `wet_floor_sign`  | `lensiq-wet-floor-sign`| Yellow caution cone deployment                                |
+| Plates            | `license_plate`   | `lensiq-license-plate` | Plate detection (paired with Claude vision OCR)               |
+| Guests            | `yolo`            | `lensiq-detector`      | Person + vehicle tracking, two feeds in parallel              |
+| Camera Clarity    | `fog_detector`    | `lensiq-fog-detector`  | Pillow + numpy lens-condition diagnostic, no GPU              |
+| Live (specialty)  | `slip_fall`       | `lensiq-slip-fall`     | Standing vs fallen person                                     |
+| Live (specialty)  | `hard_hat`        | (on-demand)            | PPE compliance                                                |
+| Live (specialty)  | `cigarette_vape`  | `lensiq-cigarette-vape`| Age-gated area loss-prevention                                |
+
+Each endpoint is independently versioned, owned, and billed. Adding a new
+use case is one notebook (`notebooks/deploy_*.ipynb`) plus one row in
+`resources/app.yml`.
+
 ---
 
 ## Notes for the presenter
 
-- **Time budget.** Three minutes on Section 1, four on Section 2 (one per
-  stop, Genie last), one on Section 3, two on Sections 4-5. The 5-minute
-  version cuts Section 4 to one vertical and skips Q&A. If you only have
-  three minutes, do Stop 1 (Live), Stop 4 (Genie), and the close.
+- **Time budget.** Three minutes on Section 1, five on Section 2 (pick
+  the two or three demo stops that match the badge, always end on
+  Genie), one on Section 4, two on Sections 5-6. Section 3 is the
+  reference material you reach for when the customer asks for detail on
+  a specific model - don't read it aloud end-to-end.
+- **5-minute version.** Section 1 (one minute), Spill Detection
+  (Section 2 stop 2), Camera Clarity (Section 2 stop 5) to land the
+  "platform of platforms" pitch, then Genie (Section 2 stop 8) and the
+  close. Skip everything else.
+- **3-minute version.** Section 1 in 30 seconds, Spill Detection
+  (Section 2 stop 2), Genie (Section 2 stop 8), close.
 - **Don't open the IDE.** This is a business demo, not a code review. The
   appendix and the deeper architecture are for the SA standing behind you.
 - **No customer logos.** This demo is generic so it can be reused.
-- **If the model is cold,** narrate it: "endpoints scale to zero, so the
+- **If a model is cold,** narrate it: "endpoints scale to zero, so the
   first frame wakes the model - in production it's already warm because
   another camera fired ten seconds ago." Don't apologize for it.
-- **If asked about ROI,** anchor to the outcomes in Section 4 with the
-  insurance, fraud, or conversion line items - not to "savings on
+- **If asked about ROI,** anchor to the dollar lines in Section 3 (slip
+  claims, drive-offs, conversion, cleaning routes) - not to "savings on
   dashboards."

@@ -30,6 +30,14 @@ sync:
     # `databricks fs cp client/public/sample-videos/*.mp4
     # dbfs:/Volumes/<catalog>/<schema>/sample_videos/ --overwrite`).
     - client/public/sample-videos/*.mp4
+    # Booth presenter content (talk track markdown + standalone HTML deck)
+    # lives in the `presenter_content` UC volume so we can refresh the
+    # narrative without redeploying the app. The deck is ~10MB and would
+    # bump up against the per-file Apps source limit anyway; the talk
+    # track is small but excluded here so the volume stays the single
+    # source of truth for both. Sync with scripts/sync-presenter-content.sh.
+    - docs/booth-deck.html
+    - docs/dais-talk-track.md
     # Research footage parked under .tmp/ (git-ignored).
     - .tmp/
 
@@ -73,33 +81,33 @@ variables:
     description: YOLO general-objects endpoint (custom ultralytics PyFunc).
     default: lensiq-detector
   license_plate_endpoint:
-    description: License-plate endpoint (Universe weights served locally via ultralytics).
+    description: License-plate endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-license-plate
   spill_endpoint:
-    description: Spill endpoint (Universe weights served locally via ultralytics).
+    description: Spill endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-spill
   wet_floor_sign_endpoint:
-    description: Wet-floor-sign endpoint (Universe weights served locally via ultralytics).
+    description: Wet-floor-sign endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-wet-floor-sign
   cigarette_vape_endpoint:
-    description: Cigarette/vape endpoint (Universe weights served locally via ultralytics).
+    description: Cigarette/vape endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-cigarette-vape
   slip_fall_endpoint:
-    description: Slip-and-fall endpoint (Universe weights served locally via ultralytics).
+    description: Slip-and-fall endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-slip-fall
   fog_detector_endpoint:
     description: Standalone Pillow+numpy fog / lens-condition classifier.
     default: lensiq-fog-detector
 
-  # ─── Roboflow secret (deploy-time ONLY) ───────────────────────────────
-  # Used by `notebooks/deploy_roboflow_detector.ipynb` to call the
-  # Roboflow SDK and download the trained `weights.pt` for each Universe
-  # model into the MLflow artifact. The serving endpoints have ZERO
-  # outbound Roboflow dependency once deployed - inference runs locally
-  # via ultralytics against the baked-in weights. The app SP never needs
-  # this secret.
+  # ─── Roboflow secret ──────────────────────────────────────────────────
+  # Injected into each Roboflow-backed serving endpoint via
+  # environment_vars so the Roboflow Inference SDK can authenticate its
+  # one-time weight download + license check on cold start. Per-frame
+  # inference does NOT use the secret. The deploy notebook also reads it
+  # as an existence probe so we don't ship a model version that can never
+  # load. The app SP never needs this secret.
   roboflow_secret_scope:
-    description: Databricks secret scope holding ROBOFLOW_API_KEY (deploy time only).
+    description: Databricks secret scope holding ROBOFLOW_API_KEY.
     default: reggie_pierce
   roboflow_secret_key:
     description: Key inside roboflow_secret_scope that holds the Roboflow API key.
@@ -164,19 +172,22 @@ resources:
     # Fan-out deploy of the 5 Roboflow-Universe-backed detector endpoints.
     # Each task runs the same parameterized notebook with a different
     # `model_slug` + `roboflow_{workspace,project,version}` triple. The
-    # notebook downloads the trained `weights.pt` from Roboflow at deploy
-    # time, bakes them into a Databricks-native ultralytics PyFunc, and
-    # registers / deploys a dedicated UC model + serving endpoint per
-    # detector. Re-run an individual task to ship a new version of just
-    # that detector. At serve time there is NO outbound call to Roboflow
-    # - inference runs locally inside the endpoint.
+    # notebook registers a PyFunc that wraps `inference.get_model(...)`
+    # and creates / updates a dedicated UC model + serving endpoint per
+    # detector. On the endpoint's first cold start, the Roboflow Inference
+    # SDK downloads ONNX weights into a writable temp dir; every
+    # subsequent frame is served locally. Re-run an individual task to
+    # ship a new version of just that detector. Per-frame inference does
+    # NOT touch Roboflow.
     lensiq_deploy_roboflow_detectors:
       name: lensiq_deploy_roboflow_detectors
       tasks:
         # Triples below are read from the Universe URL:
         #   https://universe.roboflow.com/<workspace>/<project>/model/<version>
-        # The Roboflow Python SDK call inside the notebook is:
-        #   Roboflow(api_key=...).workspace(WS).project(PROJ).version(VER).model.download()
+        # The served PyFunc calls:
+        #   from inference import get_model
+        #   get_model(model_id=f"{project}/{version}", api_key=...)
+        # on cold start. The workspace slug is kept for MLflow tagging only.
         - task_key: deploy_license_plate
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb

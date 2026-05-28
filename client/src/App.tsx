@@ -1,8 +1,9 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Activity, Bell, BookOpen, Camera, Car, CloudFog, Cone, Cpu, Database, LayoutDashboard,
-  Menu, Package, PlayCircle, TrendingUp, Upload, Users, Video, Workflow,
+  Menu, Package, PanelLeftClose, PanelLeftOpen, PlayCircle, Presentation, TrendingUp,
+  Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
   Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
@@ -23,6 +24,7 @@ import { GuestsPage } from "./pages/Guests";
 import { SpillsPage } from "./pages/Spills";
 import { CameraHealthPage } from "./pages/CameraHealth";
 import { InfoPage } from "./pages/Info";
+import { DeckPage } from "./pages/Deck";
 import { AIChatButton } from "./components/AIChatButton";
 import { GlobalLoadingBar } from "./components/GlobalLoadingBar";
 import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
@@ -49,6 +51,7 @@ const VIEW_TITLES: Record<string, string> = {
   spills: "Spill Detection",
   clarity: "Camera Clarity",
   info: "Talk Track",
+  deck: "Booth Deck",
 };
 
 interface NavButtonProps {
@@ -116,6 +119,7 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Reference</div>
       <NavButton view="info"       label="Talk Track"    icon={BookOpen}        activeView={activeView} onNavigate={handle} />
+      <NavButton view="deck"       label="Booth Deck"    icon={Presentation}    activeView={activeView} onNavigate={handle} />
     </nav>
   );
 }
@@ -146,24 +150,56 @@ export default function App() {
   );
 }
 
+// Key the desktop sidebar collapse state under in localStorage so the
+// presenter's preference (e.g. "hidden while I'm walking the talk track")
+// survives a page reload during the booth demo.
+const SIDEBAR_COLLAPSED_KEY = "lensiq.sidebarCollapsed";
+
+function _readSidebarCollapsed(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function AppShell() {
   const location = useLocation();
   const activeView = location.pathname.slice(1) || "live";
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
+  // Desktop-only collapse. The mobile sidebar is the Sheet drawer below
+  // and stays driver by `drawerOpen` regardless of this flag.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => _readSidebarCollapsed());
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      // Storage can be disabled in private mode - presenter still gets
+      // the collapse for the current session, just not persisted.
+    }
+  }, [sidebarCollapsed]);
+
+  const sidebarVisible = !sidebarCollapsed;
+  const SidebarToggleIcon = sidebarVisible ? PanelLeftClose : PanelLeftOpen;
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
       <GlobalLoadingBar />
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-slate-200">
-        <div className="p-6 border-b border-slate-200">
-          <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
-        </div>
-        <div className="flex-1 p-4 overflow-y-auto">
-          <NavItems activeView={activeView} userRole={userRole} />
-        </div>
-      </aside>
+      {sidebarVisible && (
+        <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-slate-200">
+          <div className="p-6 border-b border-slate-200">
+            <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
+          </div>
+          <div className="flex-1 p-4 overflow-y-auto">
+            <NavItems activeView={activeView} userRole={userRole} />
+          </div>
+        </aside>
+      )}
 
       <div className="flex-1 flex flex-col min-w-0">
         <header className="bg-white border-slate-200 border-b">
@@ -189,6 +225,31 @@ function AppShell() {
                     </div>
                   </SheetContent>
                 </Sheet>
+
+                {/* Desktop sidebar toggle. Collapses the sidebar so wide
+                    artifacts (booth deck iframe, talk track prose) get the
+                    full width of the viewport without the mobile drawer
+                    pattern. Hidden on mobile - the hamburger above already
+                    drives the Sheet drawer there. */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="hidden lg:inline-flex"
+                  onClick={() => setSidebarCollapsed((c) => !c)}
+                  title={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
+                  aria-label={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
+                >
+                  <SidebarToggleIcon className="w-5 h-5" />
+                </Button>
+
+                {/* When the sidebar is collapsed on desktop we lose the
+                    LensIQ logo from the rail; show a compact one in the
+                    header so the brand still anchors the page. */}
+                {!sidebarVisible && (
+                  <div className="hidden lg:flex items-center gap-2">
+                    <ApertureIcon size={24} />
+                  </div>
+                )}
 
                 <div className="lg:hidden flex items-center gap-2">
                   <ApertureIcon size={26} />
@@ -251,6 +312,7 @@ function AppShell() {
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             <Route path="/info" element={<InfoPage />} />
+            <Route path="/deck" element={<DeckPage />} />
           </Routes>
         </div>
 

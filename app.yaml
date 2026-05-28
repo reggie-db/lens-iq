@@ -38,25 +38,32 @@ env:
     valueFrom: slip_fall
   - name: DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR
     valueFrom: fog_detector
-  # Volume paths are supplied as plain values rather than `valueFrom: <binding>`
-  # because granting the app SP USE CATALOG on shared catalogs requires MANAGE
-  # which the deploy user may not have. The files plugin acts OBO, so per-user
-  # permissions on the volumes are still enforced at runtime.
-  #
-  # ${var.catalog} / ${var.schema} are bundle variables interpolated by DABs
-  # at deploy time. Per-target overrides live in databricks.yml -> targets.
+  # Volume paths come from `valueFrom: <binding>` so the Apps platform
+  # injects the resolved /Volumes/<catalog>/<schema>/<volume> path at boot.
+  # Each binding name below corresponds to an `uc_securable` resource in
+  # resources/app.yml. Per Databricks docs, a uc_securable of type=VOLUME
+  # resolves to the absolute volume path, not the catalog.schema.name tuple.
+  # This avoids the ${var.catalog} / ${var.schema} substitution gap - DABs
+  # does not interpolate bundle variables inside app.yaml until CLI
+  # 0.283.0+, so plain `value:` strings ship literally as "${var.catalog}".
   - name: DATABRICKS_VOLUME_FILES
-    value: /Volumes/${var.catalog}/${var.schema}/frames
+    valueFrom: frames
   - name: DATABRICKS_VOLUME_FRAMES
-    value: /Volumes/${var.catalog}/${var.schema}/frames
+    valueFrom: frames
   - name: DATABRICKS_VOLUME_INBOX
-    value: /Volumes/${var.catalog}/${var.schema}/frames_inbox
+    valueFrom: frames_inbox
   # Read-only volume holding the demo MP4 catalog. The AppKit files plugin
   # auto-mounts it at /api/files/sample_videos/raw?path=<file>; the bundle
   # excludes the local MP4s from the app source so prod always streams from
   # the volume (see databricks.yml -> sync.exclude).
   - name: DATABRICKS_VOLUME_SAMPLE_VIDEOS
-    value: /Volumes/${var.catalog}/${var.schema}/sample_videos
+    valueFrom: sample_videos
+  # Read-only volume holding the booth talk-track markdown and standalone
+  # HTML deck. The server.ts custom /api/presenter-content/:id route uses
+  # this volume to serve the narrative at runtime so it can be refreshed
+  # without a redeploy. Bytes pushed by scripts/sync-presenter-content.sh.
+  - name: DATABRICKS_VOLUME_PRESENTER_CONTENT
+    valueFrom: presenter_content
   # Lakebase Postgres binding. PGHOST / PGDATABASE / LAKEBASE_ENDPOINT are
   # auto-resolved from the `postgres` resource declared in resources/app.yml.
   # The AppKit lakebase plugin reads these to build the connection pool and

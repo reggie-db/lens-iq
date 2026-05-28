@@ -4,13 +4,22 @@ import {
   Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel,
   SelectTrigger, SelectValue,
 } from "@databricks/appkit-ui/react";
-import { Car, Loader2, ScanLine } from "lucide-react";
+import { Loader2, ScanLine, ZoomIn } from "lucide-react";
 import {
   captureVideoFrameForDetection,
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+
+// JPEG quality for the plate crop we persist + render. The crop is
+// always saved at native pixel resolution from the OCR-input canvas
+// (no downscaling) - display sizing is purely CSS, so the bytes we
+// write to postgres are the sharpest version we have. ~0.85 keeps the
+// data URL under ~50KB per row for typical 300-400px-wide plate crops.
+const PLATE_CROP_JPEG_QUALITY = 0.85;
+// Max number of plate entries to keep in the in-page list. Newest at top.
+const RECENT_PLATES_MAX = 20;
 
 // Live License Plates view.
 //
@@ -22,9 +31,14 @@ import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 //   3. When a NEW track appears, the vehicle's bbox is cropped from the
 //      current video frame and POSTed to /api/plate-ocr, which forwards
 //      the crop to Claude as a chat-completions image_url message and
-//      extracts the alphanumeric plate text.
-//   4. Successful reads are batched to /api/plate-reads -> Lakebase Postgres
-//      and rendered in the "Recent plates" panel.
+//      extracts the alphanumeric plate text plus a normalized [0,1] bbox
+//      around the plate within the crop.
+//   4. The plate region is cropped to a small JPEG data URL and pushed
+//      to the page's recent-reads list (deduped so a vehicle lingering
+//      in frame doesn't spam consecutive entries).
+//   5. Each accepted read is batched to /api/plate-reads -> Lakebase
+//      Postgres, including the plate-image data URL so the postgres row
+//      doubles as an audit log of exactly what the OCR pipeline saw.
 //
 // This avoids deploying a separate license-plate-detection model: Claude's
 // vision capability finds the plate within the cropped vehicle region and
@@ -42,8 +56,13 @@ const OCR_PADDING_FRACTION = 0.18;
 // for Claude vision to read confidently.
 const OCR_CROP_MAX_WIDTH = 1024;
 const POST_INTERVAL_MS = 5_000;
-const RECENT_REFRESH_MS = 5_000;
-const RECENT_LIMIT = 30;
+// Padding around the normalized plate bbox before we crop the saved
+// image. Claude's plate bbox is tight on the alphanumerics; expanding
+// gives the eye breathing room on the plate frame, mounting bracket,
+// and (often) the state name above the digits, so the saved crop looks
+// like a recognizable license plate rather than a floating row of
+// letters. 0.18 buffers both axes by ~18% of the bbox dimensions.
+const ZOOM_PADDING_FRACTION = 0.18;
 const VEHICLE_LABELS = new Set(["car", "truck", "bus", "motorcycle"]);
 const COLOR_VEHICLE = "#0ea5e9";
 const COLOR_OCR_BAD = "#94a3b8";
@@ -52,13 +71,16 @@ interface PlatesPageProps {
   isActive: boolean;
 }
 
-interface RecentRead {
-  id: number;
-  ts: string;
-  source_id: string;
-  plate_text: string;
-  confidence: number;
-  ocr_model: string | null;
+// One readable plate event. `plateImage` is a small JPEG data URL cropped
+// to just the plate region (or the full OCR crop when Claude didn't
+// return a bbox). This is what we render in the recent-plates list AND
+// what we persist to postgres on the next batch flush, so the row stores
+// exactly what the human in the booth saw.
+interface PlateRead {
+  plateText: string;
+  plateImage: string;
+  capturedAt: number;
+  sourceId: string;
 }
 
 interface VehicleTrack {
@@ -82,6 +104,7 @@ interface PendingRead {
   confidence: number;
   ocr_model: string | null;
   detection_confidence: number | null;
+  plate_image: string | null;
 }
 
 const TRACK_TTL_TICKS = 4;
@@ -89,9 +112,13 @@ const MATCH_FRACTION = 0.18;
 
 export function PlatesPage({ isActive }: PlatesPageProps) {
   const [sourceId, setSourceId] = useState("plates-daytime");
-  const [recent, setRecent] = useState<RecentRead[]>([]);
   const [sessionReads, setSessionReads] = useState<Array<{ plate: string; ts: number; source: string }>>([]);
   const [vehicleTracks, setVehicleTracks] = useState<VehicleTrack[]>([]);
+  // Ongoing list of readable plates, newest at the top. We dedupe
+  // consecutive same-text reads (e.g. a vehicle lingers in frame across
+  // several OCR attempts and we keep getting the same plate back) so the
+  // list reads as a chronological event log rather than spam.
+  const [recentPlates, setRecentPlates] = useState<PlateRead[]>([]);
 
   const candidates = useMemo(
     () => SAMPLE_VIDEOS.filter((s) => s.models.includes("license_plate") || s.id === "plates-daytime"),
@@ -99,9 +126,84 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
   );
 
   const pendingRef = useRef<PendingRead[]>([]);
-  const handleReadDone = useCallback((read: { source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null }) => {
-    pendingRef.current.push(read);
+  // Mirror of the most recent plate text we've already accepted, used by
+  // the OCR callback to dedupe. We can't read recentPlates state directly
+  // inside useCallback because the closure captures a stale snapshot.
+  const lastAcceptedPlateRef = useRef<string | null>(null);
+  const handleReadDone = useCallback((read: {
+    source_id: string;
+    plate_text: string;
+    confidence: number;
+    ocr_model: string | null;
+    detection_confidence: number | null;
+    plate_image: string;
+  }) => {
+    // Skip if this is a repeat of the most recent plate. The booth
+    // presenter watches the list grow - we don't want five identical
+    // entries when a single vehicle lingers across ticks. Persistence to
+    // postgres uses the same dedupe so the table mirrors what the user
+    // sees.
+    if (lastAcceptedPlateRef.current === read.plate_text) return;
+    lastAcceptedPlateRef.current = read.plate_text;
+    const entry: PlateRead = {
+      plateText: read.plate_text,
+      plateImage: read.plate_image,
+      capturedAt: Date.now(),
+      sourceId: read.source_id,
+    };
+    setRecentPlates((prev) => [entry, ...prev].slice(0, RECENT_PLATES_MAX));
+    pendingRef.current.push({
+      source_id: read.source_id,
+      plate_text: read.plate_text,
+      confidence: read.confidence,
+      ocr_model: read.ocr_model,
+      detection_confidence: read.detection_confidence,
+      plate_image: read.plate_image,
+    });
     setSessionReads((prev) => [{ plate: read.plate_text, ts: Date.now(), source: read.source_id }, ...prev].slice(0, 100));
+  }, []);
+
+  // Seed the recent-reads list from postgres on first mount so the user
+  // walks into a populated list rather than waiting for the first live
+  // detection. Rows without a `plate_image` (legacy data inserted before
+  // the image column existed) are filtered out - they'd render as broken
+  // tiles in the list and don't tell us anything the text alone can't.
+  //
+  // We only seed when the current list is still empty; if a live OCR
+  // happens to fire before the fetch returns (rare - the seed is fast)
+  // those entries win and the seed is discarded so we don't clobber
+  // fresher live state.
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/plate-reads/recent?limit=${RECENT_PLATES_MAX}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<{ rows: Array<{ ts: string; source_id: string; plate_text: string; plate_image: string | null }> }>;
+      })
+      .then(({ rows }) => {
+        if (cancelled) return;
+        const seeded: PlateRead[] = rows
+          .filter((r) => typeof r.plate_image === "string" && r.plate_image.length > 0)
+          .map((r) => ({
+            plateText: r.plate_text,
+            plateImage: r.plate_image as string,
+            capturedAt: new Date(r.ts).getTime(),
+            sourceId: r.source_id,
+          }));
+        if (seeded.length === 0) return;
+        setRecentPlates((prev) => (prev.length === 0 ? seeded : prev));
+        // Prime the dedupe ref against the newest seeded plate so a
+        // live OCR call that happens to return that same plate next
+        // doesn't double-write it to postgres.
+        if (lastAcceptedPlateRef.current === null) {
+          lastAcceptedPlateRef.current = seeded[0].plateText;
+        }
+      })
+      .catch(() => {
+        // Best-effort seed - if postgres is unreachable we just start
+        // with an empty list and let the live pipeline fill it.
+      });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -123,24 +225,6 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
     const id = setInterval(flush, POST_INTERVAL_MS);
     return () => clearInterval(id);
   }, [isActive]);
-
-  const loadRecent = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/plate-reads/recent?limit=${RECENT_LIMIT}`);
-      if (!res.ok) return;
-      const body = (await res.json()) as { rows: RecentRead[] };
-      setRecent(body.rows);
-    } catch {
-      // non-fatal
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!isActive) return;
-    void loadRecent();
-    const id = setInterval(() => void loadRecent(), RECENT_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadRecent]);
 
   const sessionStats = useMemo(() => {
     const unique = new Set(sessionReads.map((r) => r.plate));
@@ -191,33 +275,86 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
           />
         </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Recent plates</CardTitle>
-            <CardDescription>Latest reads from Lakebase, refreshed every {Math.round(RECENT_REFRESH_MS / 1000)}s.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2 max-h-[460px] overflow-y-auto">
-              {recent.length === 0 ? (
-                <div className="text-sm text-slate-500">No plates read yet.</div>
-              ) : (
-                recent.map((r) => (
-                  <div key={r.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-md bg-slate-50">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Car className="w-4 h-4 text-slate-500 shrink-0" />
-                      <span className="font-mono text-sm font-semibold text-slate-900 truncate">{r.plate_text}</span>
-                    </div>
-                    <span className="text-xs text-slate-500 tabular-nums shrink-0">
-                      {_formatRelative(r.ts)}
-                    </span>
-                  </div>
-                ))
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        <RecentPlatesCard plates={recentPlates} />
       </div>
     </div>
+  );
+}
+
+interface RecentPlatesCardProps {
+  plates: PlateRead[];
+}
+
+// Right-hand recent-reads panel. Newest plate sits at the top with the
+// zoomed plate image (pre-cropped server-side by the OCR pipeline) and
+// the alphanumeric text. Consecutive duplicate reads are filtered
+// upstream in `handleReadDone` so this list stays clean.
+function RecentPlatesCard({ plates }: RecentPlatesCardProps) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base flex items-center gap-2">
+          <ZoomIn className="w-4 h-4" />
+          Recent reads
+        </CardTitle>
+        <CardDescription>
+          Plate crops the OCR pipeline saw, persisted to Lakebase Postgres
+          along with the text.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="p-0">
+        {plates.length === 0 ? (
+          <div className="text-sm text-slate-500 py-8 text-center">
+            Waiting for the first plate read...
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-200 max-h-[640px] overflow-y-auto">
+            {plates.map((p, idx) => (
+              <li
+                key={`${p.capturedAt}-${p.plateText}`}
+                className="flex items-center gap-3 p-3"
+              >
+                <div
+                  className="bg-black rounded-md overflow-hidden flex items-center justify-center shrink-0"
+                  // Hero treatment for the newest plate so the booth
+                  // visitor's eye lands on the most recent read.
+                  style={{
+                    width: idx === 0 ? 180 : 120,
+                    height: idx === 0 ? 90 : 60,
+                  }}
+                >
+                  <img
+                    src={p.plateImage}
+                    alt={`Plate ${p.plateText}`}
+                    // Native-resolution JPEG bytes from postgres / the
+                    // OCR pipeline. Sizing is purely CSS - the container
+                    // sets a fixed display box, object-contain preserves
+                    // the plate's aspect ratio inside that box, and
+                    // imageRendering:pixelated keeps the alphanumerics
+                    // crisp when the display box is larger than the
+                    // native crop pixels.
+                    className="w-full h-full object-contain"
+                    style={{ imageRendering: "pixelated" }}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div
+                    className={`font-mono font-semibold tracking-wider text-slate-900 break-all ${
+                      idx === 0 ? "text-2xl" : "text-lg"
+                    }`}
+                  >
+                    {p.plateText}
+                  </div>
+                  <div className="text-xs text-slate-500 tabular-nums mt-0.5">
+                    {_formatRelative(new Date(p.capturedAt).toISOString())}
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -226,7 +363,14 @@ interface PlateFeedProps {
   sourceId: string;
   candidates: typeof SAMPLE_VIDEOS;
   onSourceChange: (id: string) => void;
-  onReadDone: (read: { source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null }) => void;
+  onReadDone: (read: {
+    source_id: string;
+    plate_text: string;
+    confidence: number;
+    ocr_model: string | null;
+    detection_confidence: number | null;
+    plate_image: string;
+  }) => void;
   onTracksChange: (tracks: VehicleTrack[]) => void;
 }
 
@@ -264,7 +408,7 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
       setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
     };
     const onError = () => {
-      setStatus(`Clip unavailable - check /api/sample-videos/${sample.id}`);
+      void describeClipFailure(sample).then(setStatus);
     };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);
@@ -458,7 +602,14 @@ async function _runOcrForTrack(
   track: VehicleTrack,
   sourceId: string,
   detectionConfidence: number,
-  onReadDone: (read: { source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null }) => void,
+  onReadDone: (read: {
+    source_id: string;
+    plate_text: string;
+    confidence: number;
+    ocr_model: string | null;
+    detection_confidence: number | null;
+    plate_image: string;
+  }) => void,
   notify: () => void,
 ) {
   track.ocrAttempts += 1;
@@ -533,6 +684,11 @@ async function _runOcrForTrack(
           Math.round(cy1 + ny2 * ch),
         ];
       }
+      // Build a small data URL of just the plate region. This is what the
+      // UI shows in the recent-reads list AND what we persist alongside
+      // the OCR text - one image per stored row so the postgres table is
+      // a self-contained audit log of what the model actually saw.
+      const plateImage = await _cropPlateImage(canvas, body.plate_bbox);
       onReadDone({
         source_id: sourceId,
         plate_text: body.plate_text,
@@ -542,6 +698,7 @@ async function _runOcrForTrack(
         confidence: detectionConfidence,
         ocr_model: body.model ?? null,
         detection_confidence: detectionConfidence,
+        plate_image: plateImage,
       });
     } else {
       track.ocrStatus = "unreadable";
@@ -551,6 +708,53 @@ async function _runOcrForTrack(
   } finally {
     notify();
   }
+}
+
+// Crop the plate region out of the OCR-input canvas at native pixel
+// resolution. We deliberately do NOT downscale here - the source
+// canvas is already capped by OCR_CROP_MAX_WIDTH on the vehicle crop,
+// and within that the plate is only ~200-400px wide. Writing the
+// native bytes keeps the saved image as sharp as the OCR pipeline
+// ever saw, and all display sizing (recent-reads list, future detail
+// views) is handled in CSS with `object-fit` + `imageRendering:
+// pixelated` so the same bytes serve any container size.
+//
+// When Claude didn't return a plate bbox we fall back to the full
+// OCR crop - heavier, but still useful as an audit log entry.
+async function _cropPlateImage(
+  sourceCanvas: HTMLCanvasElement,
+  plateBbox: [number, number, number, number] | null,
+): Promise<string> {
+  const sw = sourceCanvas.width;
+  const sh = sourceCanvas.height;
+  let sx = 0, sy = 0, cropW = sw, cropH = sh;
+  if (plateBbox) {
+    const [nx1, ny1, nx2, ny2] = plateBbox;
+    const bw = Math.max(0, nx2 - nx1);
+    const bh = Math.max(0, ny2 - ny1);
+    const padX = bw * ZOOM_PADDING_FRACTION;
+    const padY = bh * ZOOM_PADDING_FRACTION;
+    sx = Math.max(0, Math.floor((nx1 - padX) * sw));
+    sy = Math.max(0, Math.floor((ny1 - padY) * sh));
+    const ex = Math.min(1, nx2 + padX);
+    const ey = Math.min(1, ny2 + padY);
+    cropW = Math.max(1, Math.ceil(ex * sw) - sx);
+    cropH = Math.max(1, Math.ceil(ey * sh) - sy);
+  }
+  const out = document.createElement("canvas");
+  out.width = cropW;
+  out.height = cropH;
+  const ctx = out.getContext("2d");
+  if (!ctx) {
+    // Worst case: hand back the whole source canvas. Heavier but still
+    // a usable audit-log entry, and we never want a crop failure to
+    // drop the read entirely.
+    return sourceCanvas.toDataURL("image/jpeg", PLATE_CROP_JPEG_QUALITY);
+  }
+  // No scaling - source-rect dimensions equal destination-rect
+  // dimensions, so we get a pixel-perfect copy of the plate region.
+  ctx.drawImage(sourceCanvas, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+  return out.toDataURL("image/jpeg", PLATE_CROP_JPEG_QUALITY);
 }
 
 function _formatRelative(iso: string): string {

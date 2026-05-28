@@ -243,6 +243,48 @@ export function sampleVideoUrl(sample: SampleVideo): string {
   return `/api/sample-videos/${sample.id}`;
 }
 
+// Human-friendly status string for a sample-video <video> `error` event.
+//
+// Probes /api/sample-videos/:id with a 1-byte Range request and inspects
+// the response so the UI can surface the server's actual error body
+// (the route returns JSON like `{ error: "Sample X not found locally or
+// in the sample_videos volume." }` on 404) instead of every page
+// repeating the same "Clip unavailable - check /api/sample-videos/<id>"
+// placeholder.
+//
+// The 1-byte Range stays cheap on the local-disk fast path; on a 404 the
+// server short-circuits before touching the UC volume or upstream CDN so
+// the probe is essentially free.
+export async function describeClipFailure(
+  sample: SampleVideo | string | undefined,
+): Promise<string> {
+  const resolved = typeof sample === "string" ? getSampleVideo(sample) : sample;
+  if (!resolved) {
+    const id = typeof sample === "string" ? sample : "<unknown>";
+    return `Clip unavailable - unknown sample id: ${id}.`;
+  }
+  const url = sampleVideoUrl(resolved);
+  try {
+    const res = await fetch(url, { headers: { Range: "bytes=0-0" } });
+    if (res.ok || res.status === 206) {
+      return `Clip unavailable - ${resolved.name} could not be decoded by the browser.`;
+    }
+    let detail = "";
+    try {
+      const body = (await res.json()) as { error?: unknown };
+      if (typeof body.error === "string") detail = body.error;
+    } catch {
+      // Body wasn't JSON; fall back to status code below.
+    }
+    return detail
+      ? `Clip unavailable - ${detail}`
+      : `Clip unavailable - ${url} returned HTTP ${res.status}.`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Clip unavailable - ${url} unreachable: ${msg}.`;
+  }
+}
+
 // Suggest the first sample that lists this model as a good fit. Returns
 // undefined if none of the curated samples match - the UI then leaves the
 // source dropdown alone instead of jumping to an unrelated clip.

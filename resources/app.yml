@@ -110,3 +110,13 @@ resources:
             securable_full_name: ${var.catalog}.${var.schema}.sample_videos
             securable_type: VOLUME
             permission: READ_VOLUME
+        - name: presenter_content
+          # Booth talk-track markdown + standalone HTML deck. Bundle-owned
+          # (resources/volumes.yml) so the volume exists after bundle
+          # deploy; bytes are pushed by scripts/sync-presenter-content.sh
+          # and re-pushed any time the narrative changes - no redeploy
+          # required to refresh the UI.
+          uc_securable:
+            securable_full_name: ${var.catalog}.${var.schema}.presenter_content
+            securable_type: VOLUME
+            permission: READ_VOLUME

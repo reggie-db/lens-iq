@@ -1,44 +1,68 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
-import { Badge, Card, CardContent } from "@databricks/appkit-ui/react";
-import { BookOpen } from "lucide-react";
+import { Card, CardContent, Skeleton } from "@databricks/appkit-ui/react";
 
-// The /info page renders docs/dais-talk-track.md verbatim so the booth
-// presenter, the AE running through the demo, and the repo PR reviewer are
-// all reading the exact same words. The markdown file is the single source
-// of truth - imported at build time via Vite's ?raw suffix.
-import talkTrackMd from "../../../docs/dais-talk-track.md?raw";
-
-// Configure once at module load. GFM gives us the bits the talk track uses
-// (lists, fenced code, autolinks). Headings render as plain <h1>..<hN> and
-// pick up the prose styling below.
+// The /info page renders the booth talk track (docs/dais-talk-track.md)
+// pulled live from /api/presenter-content/talk-track. That route reads
+// from docs/ on disk in dev and falls back to the presenter_content UC
+// volume in prod, so the script can be edited and re-synced without a
+// full redeploy.
+//
+// The content is fetched once on mount with Cache-Control: no-store so
+// a browser refresh always pulls the latest copy from the volume - no
+// in-app refresh button needed.
+//
+// The booth deck (HTML slides) lives at its own /deck route — see
+// pages/Deck.tsx — to give it the full viewport.
+//
+// GFM gives us the few markdown bits the talk track relies on (lists,
+// fenced code, autolinks). Configured once at module load.
 marked.setOptions({ gfm: true, breaks: false });
 
 export function InfoPage() {
-  const html = useMemo(() => marked.parse(talkTrackMd) as string, []);
+  const [markdown, setMarkdown] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/presenter-content/talk-track", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`Talk track fetch failed: HTTP ${res.status}`);
+        return res.text();
+      })
+      .then((text) => {
+        if (cancelled) return;
+        setMarkdown(text);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const html = useMemo(() => marked.parse(markdown) as string, [markdown]);
 
   return (
-    <div className="max-w-4xl mx-auto pb-12">
-      <Card className="mb-6">
-        <CardContent className="flex items-center gap-3 py-4">
-          <BookOpen className="w-5 h-5 text-red-600 shrink-0" />
-          <div className="flex-1">
-            <div className="text-sm font-semibold text-slate-900">
-              Booth talk track
-            </div>
-            <div className="text-xs text-slate-600">
-              Rendered live from <code className="text-xs">docs/dais-talk-track.md</code>.
-              Edit the markdown to update this page.
-            </div>
-          </div>
-          <Badge variant="outline">5-10 min</Badge>
-        </CardContent>
-      </Card>
-
-      <article
-        className="talk-track prose prose-slate max-w-none"
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+    <div className="max-w-5xl mx-auto pb-12 space-y-4">
+      {loading && !markdown && <Skeleton className="h-96 w-full" />}
+      {error && (
+        <Card>
+          <CardContent className="py-4 text-sm text-red-600">
+            Failed to load talk track: {error}
+          </CardContent>
+        </Card>
+      )}
+      {markdown && (
+        <article
+          className="talk-track prose prose-slate max-w-none"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      )}
     </div>
   );
 }

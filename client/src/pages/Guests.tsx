@@ -10,7 +10,7 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 
 // Guest count view.
 //
@@ -386,7 +386,7 @@ function GuestFeed({
       setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
     };
     const onError = () => {
-      setStatus(`Clip unavailable - check /api/sample-videos/${sample.id}`);
+      void describeClipFailure(sample).then(setStatus);
     };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);

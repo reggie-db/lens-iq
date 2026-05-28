@@ -17,7 +17,7 @@ import {
 import { callDetector, type Detection } from "../lib/detector";
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "../lib/models";
 import { fetchServingStatus } from "../lib/serving-status";
-import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, defaultSampleForModel, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 
 // Sources the user can feed into the detector. "webcam" is the default; the
 // other entries map onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
@@ -153,8 +153,8 @@ export function LivePage({ isActive }: LivePageProps) {
     };
     const onError = () => {
       if (sourceId === WEBCAM_SOURCE_ID) return;
-      setStatus(`Clip unavailable - check /api/sample-videos/${sourceId}`);
       setStatusKind("error");
+      void describeClipFailure(sourceId).then(setStatus);
     };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);

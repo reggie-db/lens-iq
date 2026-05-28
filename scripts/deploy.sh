@@ -8,7 +8,12 @@
 #      MP4s into the bundle-managed sample_videos UC volume (the bundle
 #      excludes those bytes from the app source so they only live on the
 #      volume in prod).
-#   3. `databricks bundle run lens_iq` to push source code into the app and
+#   3. `scripts/sync-presenter-content.sh` to push docs/dais-talk-track.md
+#      and docs/booth-deck.html into the presenter_content UC volume. The
+#      InfoPage reads from this volume at runtime so updates to the
+#      narrative don't require an app redeploy - re-run the sync script
+#      alone and reload the page.
+#   4. `databricks bundle run lens_iq` to push source code into the app and
 #      start it.
 #
 # Defaults to the bundle's default target (`dev`). Override with -t or
@@ -52,6 +57,8 @@ databricks bundle deploy ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"}
 if [[ "$SKIP_SYNC" -eq 0 ]]; then
   _log "sync-sample-videos.sh $LABEL"
   scripts/sync-sample-videos.sh ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"}
+  _log "sync-presenter-content.sh $LABEL"
+  scripts/sync-presenter-content.sh ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"}
 fi
 
 if [[ "$SKIP_RUN" -eq 0 ]]; then

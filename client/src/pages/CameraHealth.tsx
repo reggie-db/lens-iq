@@ -11,7 +11,7 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
 
 // Camera Clarity view.
 //
@@ -473,11 +473,12 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
     // The browser fires `error` when the URL 404s or the bytes can't be
     // decoded. Without this handler the status string would hang on
     // "Loading clip..." forever because `loadedmetadata` never fires.
+    // describeClipFailure() pulls the actual server-side error body (e.g.
+    // "Sample X not found locally or in the sample_videos volume.") so the
+    // banner shows the real cause instead of a generic placeholder.
     const onError = () => {
       setStatus("Clip unavailable");
-      setErrorMessage(
-        `Could not load ${sample.name}. The server probably can't reach the sample_videos volume; check that /api/sample-videos/${sample.id} returns 200.`,
-      );
+      void describeClipFailure(sample).then(setErrorMessage);
     };
     video.addEventListener("loadedmetadata", syncVideoSize);
     video.addEventListener("resize", syncVideoSize);
