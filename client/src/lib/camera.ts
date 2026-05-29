@@ -194,6 +194,36 @@ export function resizeDataUrlForDetection(
   });
 }
 
+/**
+ * Generic data-URL resizer. Use for upload thumbnails / enrollment photos
+ * where the source comes from a file picker and is usually multi-MB.
+ * Returns the resized JPEG data URL, or the original when already under
+ * the cap. Use `resizeDataUrlForDetection` instead when you need bbox
+ * scale factors.
+ */
+export function resizeDataUrl(
+  dataUrl: string,
+  options: { maxDimension?: number; quality?: number } = {},
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      if (w <= 0 || h <= 0) {
+        resolve(null);
+        return;
+      }
+      const maxDimension = options.maxDimension ?? SNAPSHOT_MAX_DIMENSION;
+      const quality = options.quality ?? 0.82;
+      const { width: outW, height: outH } = _fitWithinBox(w, h, maxDimension);
+      resolve(_drawToDataUrl(img, w, h, outW, outH, quality));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
 export function scaleDetectionBbox(
   bbox: [number, number, number, number],
   scaleX: number,

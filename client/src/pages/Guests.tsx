@@ -10,7 +10,9 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // Guest count view.
 //
@@ -357,10 +359,13 @@ function GuestFeed({
   const tickIdxRef = useRef(0);
   const nextTrackIdRef = useRef(1);
   const [detections, setDetections] = useState<Array<Detection & { metric: string; color: string }>>([]);
-  const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
-  const [status, setStatus] = useState<string>("");
+  const [detectorStatus, setDetectorStatus] = useState<string>("");
 
-  const sample = useMemo(() => getSampleVideo(sourceId), [sourceId]);
+  const sample = useMemo(() => getSampleVideo(sourceId) ?? null, [sourceId]);
+  const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
+    isActive,
+    sample,
+  });
 
   // Reset tracker state when the source changes - tracks from one clip
   // shouldn't carry over and accidentally match objects in the next.
@@ -369,35 +374,6 @@ function GuestFeed({
     tickIdxRef.current = 0;
     nextTrackIdRef.current = 1;
   }, [sourceId]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const video = videoRef.current;
-    if (!video || !sample) return;
-    video.crossOrigin = "anonymous";
-    video.loop = true;
-    video.muted = true;
-    video.src = sampleVideoUrl(sample);
-    setStatus("Loading clip...");
-    void video.play().catch(() => undefined);
-
-    const syncVideoSize = () => {
-      setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
-    };
-    const onError = () => {
-      void describeClipFailure(sample).then(setStatus);
-    };
-    video.addEventListener("loadedmetadata", syncVideoSize);
-    video.addEventListener("resize", syncVideoSize);
-    video.addEventListener("error", onError);
-    return () => {
-      video.removeEventListener("loadedmetadata", syncVideoSize);
-      video.removeEventListener("resize", syncVideoSize);
-      video.removeEventListener("error", onError);
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [isActive, sample]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -479,9 +455,9 @@ function GuestFeed({
 
         onSample(sourceId, { current, newTracks });
         const totalCurrent = Object.values(current).reduce((a, b) => a + b, 0);
-        setStatus(totalCurrent > 0 ? `Counted ${totalCurrent} object(s)` : "Watching for activity...");
+        setDetectorStatus(totalCurrent > 0 ? `Counted ${totalCurrent} object(s)` : "Watching for activity...");
       } catch (err) {
-        setStatus(err instanceof Error ? err.message : String(err));
+        setDetectorStatus(err instanceof Error ? err.message : String(err));
       } finally {
         inFlightRef.current = false;
       }
@@ -490,34 +466,21 @@ function GuestFeed({
     return () => clearInterval(id);
   }, [isActive, onSample, sourceId, classes]);
 
+  const overlayBoxes: OverlayBox[] = useMemo(
+    () =>
+      detections.map((d) => ({
+        bbox: d.bbox,
+        color: d.color,
+        label: `${d.label} ${(d.confidence * 100).toFixed(0)}%`,
+        fillAlpha: 0,
+        labelAlpha: 1,
+      })),
+    [detections],
+  );
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
-    const w = videoSize.w || video.videoWidth || 1280;
-    const h = videoSize.h || video.videoHeight || 720;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (detections.length === 0) return;
-    ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
-    ctx.font = `${Math.max(14, Math.round(canvas.width / 60))}px sans-serif`;
-    for (const d of detections) {
-      const [x1, y1, x2, y2] = d.bbox;
-      ctx.strokeStyle = d.color;
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
-      const padding = 4;
-      const labelHeight = Math.max(18, Math.round(canvas.width / 50));
-      const tw = ctx.measureText(label).width + padding * 2;
-      ctx.fillStyle = d.color;
-      ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
-      ctx.fillStyle = "white";
-      ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
-    }
-  }, [detections, videoSize]);
+    drawBboxOverlay(canvasRef.current, videoRef.current, videoSize, overlayBoxes);
+  }, [overlayBoxes, videoSize]);
 
   return (
     <Card>
@@ -567,7 +530,13 @@ function GuestFeed({
             ))}
           </div>
         </div>
-        <div className="text-xs text-slate-500 break-words">{status || "Initializing..."}</div>
+        <div className="text-xs text-slate-500 break-words">
+          {videoStatus.kind === "loading"
+            ? videoStatus.message
+            : videoStatus.kind === "error"
+            ? videoStatus.message
+            : detectorStatus || "Initializing..."}
+        </div>
       </CardContent>
     </Card>
   );

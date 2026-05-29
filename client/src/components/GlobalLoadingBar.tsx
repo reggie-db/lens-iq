@@ -24,6 +24,8 @@ let _patched = false;
 // inherent calls where a constantly-pulsing bar would be noise:
 //   - /api/detect       : per-frame inference (0.5-2 FPS)
 //   - /api/plate-ocr    : per-plate OCR follow-up to /api/detect
+//   - /api/face-match   : per-frame face recognition (~1 FPS)
+//   - /api/face-matches : SSE / recent-list polling for the FR page
 //   - /api/serving-status: cold-start poller; already has its own dedicated
 //                          warmup UI on the pages that care.
 // Match against the URL path so absolute, relative, and Request-object
@@ -31,6 +33,8 @@ let _patched = false;
 const EXCLUDED_PATHS: readonly string[] = [
   "/api/detect",
   "/api/plate-ocr",
+  "/api/face-match",
+  "/api/face-matches",
   "/api/serving-status",
 ];
 

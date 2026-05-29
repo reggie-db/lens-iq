@@ -3,6 +3,24 @@
    @import here, because Vite inlines the AppKit styles.css ahead of any
    downstream @import url() and PostCSS rejects that ordering. */
 
+/* Single-page-app shell. Prevent iOS Safari (and Chrome on mobile) from
+   elastic-bouncing the entire viewport when the user swipes inside scroll
+   regions. The AppShell pins everything to h-screen so the body itself
+   should never need to scroll; this also disables pull-to-refresh which
+   otherwise fires during a long card scroll on the demo pages. */
+html, body {
+  height: 100%;
+  margin: 0;
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
+}
+body {
+  overflow: hidden;
+}
+#root {
+  height: 100%;
+}
+
 /* LensIQ brand tokens. Mirrors the palette in client/public/brand-kit.html
    so any Tailwind utility (bg-lava-600, text-navy-800, ...) resolves to the
    same hex the brand kit ships. Type families are also registered as

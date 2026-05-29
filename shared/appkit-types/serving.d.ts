@@ -106,6 +106,13 @@ declare module "@databricks/appkit" {
       };
       chunk: unknown;
     };
+    face_recognition: {
+      request: Record<string, unknown>;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
+      chunk: unknown;
+    };
   }
 }
 
@@ -206,6 +213,13 @@ declare module "@databricks/appkit-ui/react" {
       chunk: unknown;
     };
     fog_detector: {
+      request: Record<string, unknown>;
+      response: {
+        predictions?: Record<string, unknown>[];
+      };
+      chunk: unknown;
+    };
+    face_recognition: {
       request: Record<string, unknown>;
       response: {
         predictions?: Record<string, unknown>[];

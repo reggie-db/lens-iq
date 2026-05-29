@@ -2,8 +2,8 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-
 import { useEffect, useState } from "react";
 import {
   Activity, Bell, BookOpen, Camera, Car, CloudFog, Cone, Cpu, Database, LayoutDashboard,
-  Menu, Package, PanelLeftClose, PanelLeftOpen, PlayCircle, Presentation, TrendingUp,
-  Upload, Users, Video, Workflow,
+  Menu, Package, PlayCircle, Presentation, ScanFace, TrendingUp, Upload, Users, Video,
+  Workflow,
 } from "lucide-react";
 import {
   Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
@@ -23,6 +23,7 @@ import { PipelinePage } from "./pages/Pipeline";
 import { GuestsPage } from "./pages/Guests";
 import { SpillsPage } from "./pages/Spills";
 import { CameraHealthPage } from "./pages/CameraHealth";
+import { FacialRecognitionPage } from "./pages/FacialRecognition";
 import { InfoPage } from "./pages/Info";
 import { DeckPage } from "./pages/Deck";
 import { AIChatButton } from "./components/AIChatButton";
@@ -49,6 +50,7 @@ const VIEW_TITLES: Record<string, string> = {
   pipeline: "Continuous Pipeline",
   guests: "Guest Counts",
   spills: "Spill Detection",
+  faces: "Facial Recognition",
   clarity: "Camera Clarity",
   info: "Talk Track",
   deck: "Booth Deck",
@@ -99,6 +101,7 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <NavButton view="guests"     label="Guest Counts"   icon={Users}          activeView={activeView} onNavigate={handle} />
       <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
       <NavButton view="spills"     label="Spill Detection" icon={Cone}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="faces"      label="Facial Recognition" icon={ScanFace}   activeView={activeView} onNavigate={handle} />
       <NavButton view="clarity"    label="Camera Clarity" icon={CloudFog}       activeView={activeView} onNavigate={handle} />
       <NavButton view="upload"     label="Image Upload"  icon={Upload}          activeView={activeView} onNavigate={handle} />
       <NavButton view="pipeline"   label="Pipeline"      icon={Workflow}        activeView={activeView} onNavigate={handle} />
@@ -150,59 +153,37 @@ export default function App() {
   );
 }
 
-// Key the desktop sidebar collapse state under in localStorage so the
-// presenter's preference (e.g. "hidden while I'm walking the talk track")
-// survives a page reload during the booth demo.
-const SIDEBAR_COLLAPSED_KEY = "lensiq.sidebarCollapsed";
-
-function _readSidebarCollapsed(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function AppShell() {
   const location = useLocation();
   const activeView = location.pathname.slice(1) || "live";
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
-  // Desktop-only collapse. The mobile sidebar is the Sheet drawer below
-  // and stays driver by `drawerOpen` regardless of this flag.
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => _readSidebarCollapsed());
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    try {
-      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
-    } catch {
-      // Storage can be disabled in private mode - presenter still gets
-      // the collapse for the current session, just not persisted.
-    }
-  }, [sidebarCollapsed]);
-
-  const sidebarVisible = !sidebarCollapsed;
-  const SidebarToggleIcon = sidebarVisible ? PanelLeftClose : PanelLeftOpen;
+  // Single-page app shell:
+  //   - The viewport itself never scrolls. We pin to h-screen + overflow-hidden
+  //     on the root so iOS Safari can't elastic-bounce / "drag" the page.
+  //   - The desktop sidebar is always visible (no collapse toggle) at fixed
+  //     width, and owns its own scroll for tall nav lists.
+  //   - The header is fixed at the top of the content column.
+  //   - Only the main content area scrolls (with overscroll-contain so swipes
+  //     inside cards don't pull the entire page up).
+  //   - On mobile the sidebar is a Sheet drawer driven by the hamburger.
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
+    <div className="h-screen bg-slate-50 flex overflow-hidden overscroll-none">
       <GlobalLoadingBar />
-      {sidebarVisible && (
-        <aside className="hidden lg:flex lg:flex-col lg:w-64 bg-white border-r border-slate-200">
-          <div className="p-6 border-b border-slate-200">
-            <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
-          </div>
-          <div className="flex-1 p-4 overflow-y-auto">
-            <NavItems activeView={activeView} userRole={userRole} />
-          </div>
-        </aside>
-      )}
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-white border-r border-slate-200">
+        <div className="p-6 border-b border-slate-200 shrink-0">
+          <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
+        </div>
+        <div className="flex-1 p-4 overflow-y-auto overscroll-contain">
+          <NavItems activeView={activeView} userRole={userRole} />
+        </div>
+      </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <header className="bg-white border-slate-200 border-b">
+      <div className="flex-1 flex flex-col min-w-0 h-screen">
+        <header className="bg-white border-slate-200 border-b shrink-0">
           <div className="px-4 md:px-8 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -225,31 +206,6 @@ function AppShell() {
                     </div>
                   </SheetContent>
                 </Sheet>
-
-                {/* Desktop sidebar toggle. Collapses the sidebar so wide
-                    artifacts (booth deck iframe, talk track prose) get the
-                    full width of the viewport without the mobile drawer
-                    pattern. Hidden on mobile - the hamburger above already
-                    drives the Sheet drawer there. */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="hidden lg:inline-flex"
-                  onClick={() => setSidebarCollapsed((c) => !c)}
-                  title={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
-                  aria-label={sidebarVisible ? "Collapse sidebar" : "Expand sidebar"}
-                >
-                  <SidebarToggleIcon className="w-5 h-5" />
-                </Button>
-
-                {/* When the sidebar is collapsed on desktop we lose the
-                    LensIQ logo from the rail; show a compact one in the
-                    header so the brand still anchors the page. */}
-                {!sidebarVisible && (
-                  <div className="hidden lg:flex items-center gap-2">
-                    <ApertureIcon size={24} />
-                  </div>
-                )}
 
                 <div className="lg:hidden flex items-center gap-2">
                   <ApertureIcon size={26} />
@@ -294,7 +250,7 @@ function AppShell() {
           </div>
         </header>
 
-        <div className="flex-1 px-4 md:px-8 py-4 overflow-auto">
+        <main className="flex-1 min-h-0 px-4 md:px-8 py-4 overflow-y-auto overscroll-contain">
           <Routes>
             <Route path="/" element={<Navigate to="/live" replace />} />
             <Route path="/overview" element={<OverviewPage />} />
@@ -308,13 +264,14 @@ function AppShell() {
             <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
             <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
             <Route path="/spills" element={<SpillsPage isActive={activeView === "spills"} />} />
+            <Route path="/faces" element={<FacialRecognitionPage isActive={activeView === "faces"} />} />
             <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             <Route path="/info" element={<InfoPage />} />
             <Route path="/deck" element={<DeckPage />} />
           </Routes>
-        </div>
+        </main>
 
         <AIChatButton />
       </div>

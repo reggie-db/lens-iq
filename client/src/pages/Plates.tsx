@@ -10,7 +10,9 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // JPEG quality for the plate crop we persist + render. The crop is
 // always saved at native pixel resolution from the OCR-input canvas
@@ -381,45 +383,21 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
   const tickIdxRef = useRef(0);
   const nextTrackIdRef = useRef(1);
   const [detections, setDetections] = useState<Detection[]>([]);
-  const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
-  const [status, setStatus] = useState<string>("");
+  // Detector-side status (rolling). Video lifecycle is owned by the
+  // shared hook; we surface whichever message is more recent.
+  const [detectorStatus, setDetectorStatus] = useState<string>("");
 
-  const sample = useMemo(() => getSampleVideo(sourceId), [sourceId]);
+  const sample = useMemo(() => getSampleVideo(sourceId) ?? null, [sourceId]);
+  const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
+    isActive,
+    sample,
+  });
 
   useEffect(() => {
     tracksRef.current = [];
     tickIdxRef.current = 0;
     nextTrackIdRef.current = 1;
   }, [sourceId]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const video = videoRef.current;
-    if (!video || !sample) return;
-    video.crossOrigin = "anonymous";
-    video.loop = true;
-    video.muted = true;
-    video.src = sampleVideoUrl(sample);
-    setStatus("Loading clip...");
-    void video.play().catch(() => undefined);
-
-    const syncVideoSize = () => {
-      setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
-    };
-    const onError = () => {
-      void describeClipFailure(sample).then(setStatus);
-    };
-    video.addEventListener("loadedmetadata", syncVideoSize);
-    video.addEventListener("resize", syncVideoSize);
-    video.addEventListener("error", onError);
-    return () => {
-      video.removeEventListener("loadedmetadata", syncVideoSize);
-      video.removeEventListener("resize", syncVideoSize);
-      video.removeEventListener("error", onError);
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [isActive, sample]);
 
   useEffect(() => {
     if (!isActive) return;
@@ -482,9 +460,9 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
 
         tracksRef.current = tracksRef.current.filter((t) => tickIdx - t.lastSeenTick <= TRACK_TTL_TICKS);
         onTracksChange([...tracksRef.current]);
-        setStatus(vehicles.length > 0 ? `${vehicles.length} vehicle(s) in frame${newTracks.length > 0 ? ` - reading ${newTracks.length} new plate(s)` : ""}` : "Watching for vehicles...");
+        setDetectorStatus(vehicles.length > 0 ? `${vehicles.length} vehicle(s) in frame${newTracks.length > 0 ? ` - reading ${newTracks.length} new plate(s)` : ""}` : "Watching for vehicles...");
       } catch (err) {
-        setStatus(err instanceof Error ? err.message : String(err));
+        setDetectorStatus(err instanceof Error ? err.message : String(err));
       } finally {
         inFlightRef.current = false;
       }
@@ -493,54 +471,38 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
     return () => clearInterval(id);
   }, [isActive, sourceId, onReadDone, onTracksChange]);
 
+  const overlayBoxes: OverlayBox[] = useMemo(
+    () =>
+      detections.map((d) => {
+        // Match this detection to a track so we can pull its OCR result
+        // and (if available) the tight plate bbox Claude returned.
+        const cx = (d.bbox[0] + d.bbox[2]) / 2;
+        const cy = (d.bbox[1] + d.bbox[3]) / 2;
+        let match: VehicleTrack | undefined;
+        for (const t of tracksRef.current) {
+          if (Math.abs(t.centerX - cx) < 8 && Math.abs(t.centerY - cy) < 8) { match = t; break; }
+        }
+        const plate = match?.plateText ?? null;
+        // Prefer the tight plate bbox once OCR has returned it; otherwise
+        // fall back to the vehicle bbox so the user still sees a hint of
+        // where the read is being attempted.
+        const bbox = (match?.plateBbox ?? d.bbox) as [number, number, number, number];
+        const color = plate ? COLOR_VEHICLE : COLOR_OCR_BAD;
+        const label = plate
+          ? plate
+          : match?.ocrStatus === "pending"
+          ? "reading..."
+          : match?.ocrStatus === "unreadable"
+          ? "unreadable"
+          : d.label;
+        return { bbox, color, label, fillAlpha: 0, labelAlpha: 1 };
+      }),
+    [detections],
+  );
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
-    const w = videoSize.w || video.videoWidth || 1280;
-    const h = videoSize.h || video.videoHeight || 720;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (detections.length === 0) return;
-    ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
-    const fontSize = Math.max(14, Math.round(canvas.width / 60));
-    ctx.font = `${fontSize}px sans-serif`;
-    for (const d of detections) {
-      // Match this detection to a track so we can pull its OCR result and
-      // (if available) the tight plate bbox Claude returned.
-      const cx = (d.bbox[0] + d.bbox[2]) / 2;
-      const cy = (d.bbox[1] + d.bbox[3]) / 2;
-      let match: VehicleTrack | undefined;
-      for (const t of tracksRef.current) {
-        if (Math.abs(t.centerX - cx) < 8 && Math.abs(t.centerY - cy) < 8) { match = t; break; }
-      }
-      const plate = match?.plateText ?? null;
-      // Prefer the tight plate bbox once OCR has returned it; otherwise
-      // fall back to the vehicle bbox so the user still sees a hint of
-      // where the read is being attempted.
-      const [x1, y1, x2, y2] = match?.plateBbox ?? d.bbox;
-      const color = plate ? COLOR_VEHICLE : COLOR_OCR_BAD;
-      ctx.strokeStyle = color;
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      const label = plate
-        ? plate
-        : match?.ocrStatus === "pending"
-        ? "reading..."
-        : match?.ocrStatus === "unreadable"
-        ? "unreadable"
-        : d.label;
-      const padding = 6;
-      const labelHeight = Math.max(20, Math.round(canvas.width / 45));
-      const tw = ctx.measureText(label).width + padding * 2;
-      ctx.fillStyle = color;
-      ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
-      ctx.fillStyle = "white";
-      ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
-    }
-  }, [detections, videoSize]);
+    drawBboxOverlay(canvasRef.current, videoRef.current, videoSize, overlayBoxes);
+  }, [overlayBoxes, videoSize]);
 
   return (
     <Card>
@@ -584,8 +546,12 @@ function PlateFeed({ isActive, sourceId, candidates, onSourceChange, onReadDone,
           </Badge>
         </div>
         <div className="text-xs text-slate-500 flex items-center gap-1.5">
-          {status.includes("reading") ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-          {status || "Initializing..."}
+          {videoStatus.kind === "loading" || detectorStatus.includes("reading") ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+          {videoStatus.kind === "loading"
+            ? videoStatus.message
+            : videoStatus.kind === "error"
+            ? videoStatus.message
+            : detectorStatus || "Initializing..."}
         </div>
       </CardContent>
     </Card>

@@ -33,34 +33,41 @@ follow-up handle the rest.
 
 ---
 
-## `lensiq-spill` (universe/spills-ax5xv/2)
+## `lensiq-spill` (iiy/spills/1)
 
-Backed by `spills-ax5xv/2`, which actually fires on the canonical
-aisle-spill-then-cone CCTV clip. The previous model
-(`zan-compute/dial-wet-floor-segmentation/1`) returned 0 detections on
-every demo frame at any confidence.
+Switched here from `universe/spills-ax5xv/2`. The previous model's
+"REAL spill" signal documented below ended up unreliable in practice
+the long-tail predictions were mostly back-wall shadows and the actual
+wet patch on the floor was rarely the highest-confidence detection,
+so any sensible filter chain either let FPs through or rejected the
+real spill. Re-probed six candidates side-by-side against frames at
+5/10/15/20/25/30s of the canonical clip:
 
-Calibration probed at `conf=0.01` against frames at 2s, 5s, 12s, 20s
-plus negative grocery and forecourt frames:
+| Candidate                       | Behavior                                                |
+| ------------------------------- | ------------------------------------------------------- |
+| `universe/spills-ax5xv/2` (old) | Top conf=0.18 on back-of-aisle wall, real spill missed  |
+| `slipp/spillsyolov5/1`          | Wrong classes (`floor`, `person`, `shopping-cart`)      |
+| `iiy/spills/1`                  | Reliable floor-region hits at y=77-96%, conf saturated  |
+| `santosh-x1puv/liq/1`           | 14-19 noisy preds/frame, top hits on mid-frame walls    |
+| `app-ks258/protect-ysvvb/1`     | Wrong classes (PPE / fall / fire)                       |
+| `latifa-rdsiv/chemical-spills_/1` | Mostly bottom-edge slivers                            |
 
-| Signal                       | conf       | area  | y_center |
-| ---------------------------- | ---------- | ----- | -------- |
-| REAL spill (aisle floor)     | 0.05-0.09  | 0.1%  | 77%      |
-| FP right-shelf shadow        | 0.02-0.07  | 29%   | 54%      |
-| FP bottom-edge slivers       | 0.01-0.03  | 0.2%  | 99%      |
-| FP forecourt asphalt         | 0.32       | 1.5%  | 58%      |
-| FP produce-aisle shelf       | 0.07       | 4.8%  | 59%      |
+`iiy/spills/1` is the winner: it's a single-class spill model whose
+predictions saturate at conf=1.0 (so confidence is uninformative), but
+its bbox geometry reliably tracks the floor area. We delegate gating
+entirely to the geometric post-filters:
 
-Filter chain that keeps the real spill and rejects every probed FP:
+- `min_confidence=0.50` floor on the SDK call - cheap NMS gate, since
+  every survivor comes back at 1.0 anyway.
+- `min_area_pct=0.05` drops micro-specks.
+- `max_area_pct=3.0` rejects the model's "back wall / aisle" hallucinations
+  (those span 20-30% of the frame).
+- `min_y_center_pct=70.0` strips ceiling and mid-shelf FPs.
+- `max_y_center_pct=95.0` cuts the bottom-edge sliver FPs that several
+  candidates also emit (they cluster at y=96-99%).
 
-- `min_confidence=0.04` keeps real (>=0.05), rejects edge slivers
-- `min_area_pct=0.05` rejects micro-detections
-- `max_area_pct=2.0` rejects shelf shadows + produce-aisle FP
-- `min_y_center_pct=65.0` / `max_y_center_pct=95.0` rejects shelf,
-  ceiling, and asphalt FPs as well as the bottom slivers
-
-Upstream class label `Spill` is renamed to lowercase `spill` so the
-AppKit chart tinting matches the endpoint slug.
+Upstream class `spill` is preserved via `class_label_override=spill`
+so the AppKit chart tinting matches the endpoint slug.
 
 ---
 

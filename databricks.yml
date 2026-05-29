@@ -98,6 +98,9 @@ variables:
   fog_detector_endpoint:
     description: Standalone Pillow+numpy fog / lens-condition classifier.
     default: lensiq-fog-detector
+  face_recognition_endpoint:
+    description: InsightFace buffalo_l detector + ArcFace 512-d embedder (PyFunc, scale-to-zero).
+    default: lensiq-face-recognition
 
   # ─── Roboflow secret ──────────────────────────────────────────────────
   # Injected into each Roboflow-backed serving endpoint via
@@ -200,16 +203,35 @@ resources:
               schema: ${var.schema}
               model_slug: spill
               model_display_name: Spills
-              roboflow_workspace: universe
-              roboflow_project: spills-ax5xv
-              roboflow_version: "2"
+              # Switched from universe/spills-ax5xv/2 (which mostly emitted
+              # shelf-wall FPs and never tagged the actual wet patch on the
+              # canonical aisle clip) to iiy/spills/1. Per side-by-side
+              # probing in docs/detector-calibration.md, this is the only
+              # candidate that consistently fires on the floor area at
+              # y_center=77-96% where real spills live. Its confidences
+              # are saturated at 1.0 (single-class model), so we rely on
+              # area + y_center filters to gate out the bottom-edge
+              # slivers and back-wall FPs.
+              roboflow_workspace: iiy
+              roboflow_project: spills
+              roboflow_version: "1"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
               class_label_override: spill
-              min_confidence: "0.04"
+              # Saturated-confidence model -> floor at 0.5 just gates out
+              # NMS-droppable noise (anything the SDK would already cut at
+              # default conf). The geometric filters are doing the work.
+              min_confidence: "0.50"
+              # Drop micro-slivers and frame-edge specks; keep small floor
+              # patches (the actual spill is ~0.1-1% of the frame).
               min_area_pct: "0.05"
-              max_area_pct: "2.0"
-              min_y_center_pct: "65.0"
+              # Reject the model's recurring "back wall / shelf" FPs which
+              # span 20-30% of the frame.
+              max_area_pct: "3.0"
+              # Real spills are floor-level (y_center 70-95%). Cuts ceiling
+              # / mid-shelf hallucinations.
+              min_y_center_pct: "70.0"
+              # Bottom-edge sliver FPs land at y>=96%. Cap below that.
               max_y_center_pct: "95.0"
         - task_key: deploy_wet_floor_sign
           notebook_task:
@@ -270,6 +292,24 @@ resources:
               schema: ${var.schema}
               registered_name: lensiq_fog_detector
               endpoint_name: ${var.fog_detector_endpoint}
+
+    # InsightFace face-detect + 512-d ArcFace embedder. No external API
+    # key; the buffalo_l model pack downloads onto the serving container
+    # on the first cold start and stays local thereafter. Matching
+    # against known faces is done server-side via pgvector cosine search
+    # on the `faces` table that the AppKit server provisions in Lakebase.
+    lensiq_deploy_face_recognition:
+      name: lensiq_deploy_face_recognition
+      tasks:
+        - task_key: deploy_face_recognition
+          notebook_task:
+            notebook_path: ./notebooks/deploy_face_recognition.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              registered_name: lensiq_face_recognition
+              endpoint_name: ${var.face_recognition_endpoint}
+              det_size: "640"
 
     pizza_vision_simulate:
       name: pizza_vision_simulate

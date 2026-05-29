@@ -38,6 +38,8 @@ env:
     valueFrom: slip_fall
   - name: DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR
     valueFrom: fog_detector
+  - name: DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION
+    valueFrom: face_recognition
   # Volume paths come from `valueFrom: <binding>` so the Apps platform
   # injects the resolved /Volumes/<catalog>/<schema>/<volume> path at boot.
   # Each binding name below corresponds to an `uc_securable` resource in
@@ -64,13 +66,11 @@ env:
   # without a redeploy. Bytes pushed by scripts/sync-presenter-content.sh.
   - name: DATABRICKS_VOLUME_PRESENTER_CONTENT
     valueFrom: presenter_content
-  # Lakebase Postgres binding. PGHOST / PGDATABASE / LAKEBASE_ENDPOINT are
-  # auto-resolved from the `postgres` resource declared in resources/app.yml.
-  # The AppKit lakebase plugin reads these to build the connection pool and
-  # handles OAuth credential refresh against the app SP.
-  - name: PGHOST
-    valueFrom: postgres
-  - name: PGDATABASE
-    valueFrom: postgres
+  # Lakebase Postgres binding. Only LAKEBASE_ENDPOINT is set here. The Apps
+  # platform auto-injects PGHOST / PGDATABASE / PGSSLMODE / PGUSER / PGPORT /
+  # PGAPPNAME when the `postgres` resource (resources/app.yml) is bound.
+  # Setting PGHOST/PGDATABASE explicitly with `valueFrom: postgres` overrides
+  # those with the endpoint resource path string (projects/.../endpoints/...)
+  # which then fails DNS lookup inside pg.Pool.
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres

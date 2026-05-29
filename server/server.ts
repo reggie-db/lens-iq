@@ -6,6 +6,7 @@ import { analytics, createApp, files, lakebase, serving, server, sql } from "@da
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
+import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
 
 const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
 const VIDEO_CONTENT_TYPE = "video/mp4";
@@ -127,13 +128,6 @@ interface NormalizedDetection {
   class_id: number;
   confidence: number;
   bbox: [number, number, number, number];
-}
-
-interface ServingInvokeResult {
-  ok: boolean;
-  data?: unknown;
-  status?: number;
-  message?: string;
 }
 
 // Parse the YOLO / Roboflow PyFunc serving response. The deploy_yolo notebook
@@ -524,6 +518,11 @@ const AppKit = await createApp({
         cigarette_vape: { env: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE" },
         slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
         fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
+        // InsightFace buffalo_l: per-frame face detect + 512-d ArcFace
+        // embedding. Called from /api/face-match (live) and /api/faces
+        // (one-shot upload). Matching against the enrolled `faces` table
+        // happens server-side via pgvector cosine search.
+        face_recognition: { env: "DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION" },
       },
     }),
     files({
@@ -743,17 +742,14 @@ const AppKit = await createApp({
 
         let detections: NormalizedDetection[] = [];
         try {
-          const result = (await appkit.serving(model.servingAlias).invoke({
-            dataframe_records: [row],
-          })) as ServingInvokeResult;
-          if (!result.ok) {
-            res.status(result.status ?? 502).json({
-              error: `Detector failed (${model.id}): ${result.message ?? "Serving invoke failed"}`,
-            });
-            return;
-          }
-          detections = _normalizeDatabricks(result);
+          const data = await invokeServing(appkit, model.servingAlias, { dataframe_records: [row] });
+          detections = _normalizeDatabricks(data);
         } catch (err) {
+          // EndpointNotDeployedError gets a structured 503 so the UI can
+          // surface the exact `databricks bundle run ...` to run. Every
+          // other failure keeps the existing "Detector failed (<id>): ..."
+          // shape that the client already renders.
+          if (sendEndpointError(res, err)) return;
           const message = err instanceof Error ? err.message : String(err);
           res.status(502).json({ error: `Detector failed (${model.id}): ${message}` });
           return;
@@ -937,7 +933,7 @@ const AppKit = await createApp({
           'If and only if no plate is visible at all, respond with: {"plate":"UNREADABLE","bbox":null}',
         ].join(" ");
         try {
-          const result = (await appkit.serving("llm").invoke({
+          const data = await invokeServing(appkit, "llm", {
             messages: [
               {
                 role: "user",
@@ -952,16 +948,12 @@ const AppKit = await createApp({
             // in practice). 80 was too tight - we occasionally lost
             // the closing brace and dropped the bbox.
             max_tokens: 160,
-          })) as { ok: boolean; status?: number; message?: string; data?: unknown };
-          if (!result.ok) {
-            res.status(result.status ?? 502).json({ error: result.message ?? "OCR failed" });
-            return;
-          }
+          });
           // Defensive parser: Claude sometimes wraps JSON in ```json fences
           // despite the prompt, and occasionally prepends a stray newline
           // or `Output:`. Strip those before JSON.parse so the bbox
           // survives the round trip.
-          const raw = _extractChatText(result.data).trim();
+          const raw = _extractChatText(data).trim();
           const jsonText = _extractJsonObject(raw);
           let plateText: string | null = null;
           let plateBbox: [number, number, number, number] | null = null;
@@ -987,6 +979,7 @@ const AppKit = await createApp({
             model: process.env.DATABRICKS_SERVING_ENDPOINT_LLM ?? null,
           });
         } catch (err) {
+          if (sendEndpointError(res, err)) return;
           const message = err instanceof Error ? err.message : String(err);
           res.status(500).json({ error: `OCR call failed: ${message}` });
         }
@@ -1379,6 +1372,488 @@ const AppKit = await createApp({
           const message = err instanceof Error ? err.message : String(err);
           res.status(500).json({ error: `Lakebase query failed: ${message}` });
         }
+      });
+
+      // ─── Facial recognition ──────────────────────────────────────────
+      //
+      // The Facial Recognition page enrolls a small set of "known" faces
+      // (banned / VIP / staff) and then runs the live webcam through the
+      // lensiq-face-recognition endpoint per tick. Matching is a single
+      // pgvector cosine search against the enrolled embeddings:
+      //
+      //   1. Per-frame: POST /api/face-match with the captured image.
+      //      The endpoint detects faces + emits 512-d ArcFace embeddings;
+      //      for each face we run `SELECT ... ORDER BY embedding <=>
+      //      $face_emb LIMIT 1`. If similarity >= threshold the face is
+      //      labelled with the known person's name + role and a row is
+      //      inserted into `face_matches` (deduped by face id + 30s cool-
+      //      down so a lingering subject doesn't spam the stream).
+      //   2. One-shot enroll: POST /api/faces with a name + role + image
+      //      crop calls the same endpoint, picks the largest detected
+      //      face, and stores the embedding + thumbnail in postgres.
+      //
+      // Embeddings are stored as `vector(512)` (pgvector). HNSW index
+      // on cosine ops so per-tick matches stay constant-time even with
+      // a few hundred enrolled faces.
+      // Treat the duplicate-key races that `CREATE EXTENSION IF NOT EXISTS`
+      // and `CREATE INDEX IF NOT EXISTS` can throw under concurrency as a
+      // success. Postgres's internal catalog inserts (pg_type, pg_class,
+      // pg_namespace) aren't synchronized against parallel "create if not
+      // exists" callers, so two clients racing on extension/index install
+      // surface as `duplicate key value violates unique constraint
+      // "pg_type_typname_nsp_index"` / "pg_class_relname_nsp_index" /
+      // "pg_namespace_nspname_index". Once the loser of the race retries
+      // the read, the object exists, which is exactly the state we wanted.
+      function _isCreateRace(err: unknown): boolean {
+        const message = err instanceof Error ? err.message : String(err);
+        return (
+          message.includes("duplicate key value violates unique constraint")
+          && (message.includes("pg_type_typname_nsp_index")
+            || message.includes("pg_class_relname_nsp_index")
+            || message.includes("pg_namespace_nspname_index")
+            || message.includes("pg_extension_name_index"))
+        );
+      }
+
+      async function _runIdempotentDdl(sql: string): Promise<void> {
+        try {
+          await appkit.lakebase.query(sql);
+        } catch (err) {
+          if (_isCreateRace(err)) return;
+          throw err;
+        }
+      }
+
+      // Race-safe ensure: store the in-flight promise so concurrent callers
+      // await the same DDL pass instead of all firing CREATE EXTENSION /
+      // CREATE TABLE at once and stomping on each other.
+      let _facesTablesReady: Promise<void> | null = null;
+      const _ensureFacesTables = (): Promise<void> => {
+        if (_facesTablesReady) return _facesTablesReady;
+        const pending = (async () => {
+          // pgvector ships with Lakebase but is not enabled by default per
+          // database; CREATE EXTENSION IF NOT EXISTS is idempotent and the
+          // app SP has CAN_CONNECT_AND_CREATE so it's allowed to install
+          // extensions on the bound database.
+          await _runIdempotentDdl("CREATE EXTENSION IF NOT EXISTS vector");
+          await _runIdempotentDdl(`
+            CREATE TABLE IF NOT EXISTS faces (
+              id           BIGSERIAL PRIMARY KEY,
+              name         TEXT NOT NULL,
+              role         TEXT NOT NULL CHECK (role IN ('banned', 'vip', 'staff')),
+              image        TEXT,
+              embedding    vector(512) NOT NULL,
+              det_score    REAL,
+              created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+          `);
+          // HNSW cosine index for sub-millisecond matches. The 'vector_cosine_ops'
+          // opclass matches the `<=>` operator we use in /api/face-match.
+          await _runIdempotentDdl(`
+            CREATE INDEX IF NOT EXISTS idx_faces_embedding
+              ON faces USING hnsw (embedding vector_cosine_ops)
+          `);
+          await _runIdempotentDdl(`
+            CREATE TABLE IF NOT EXISTS face_matches (
+              id          BIGSERIAL PRIMARY KEY,
+              ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              source_id   TEXT NOT NULL,
+              face_id     BIGINT REFERENCES faces(id) ON DELETE SET NULL,
+              name        TEXT NOT NULL,
+              role        TEXT NOT NULL,
+              similarity  REAL NOT NULL,
+              bbox_x1     INT NOT NULL,
+              bbox_y1     INT NOT NULL,
+              bbox_x2     INT NOT NULL,
+              bbox_y2     INT NOT NULL,
+              frame_image TEXT
+            )
+          `);
+          await _runIdempotentDdl(
+            "CREATE INDEX IF NOT EXISTS idx_face_matches_ts ON face_matches (ts DESC)",
+          );
+        })();
+        // Cache only on success; if the first pass fails the next caller
+        // gets a fresh attempt instead of inheriting a poisoned promise.
+        _facesTablesReady = pending.catch((err) => {
+          _facesTablesReady = null;
+          throw err;
+        });
+        return _facesTablesReady;
+      };
+
+      // Shape of one face returned by lensiq-face-recognition. The PyFunc
+      // returns one list per dataframe row; each entry is
+      // `{bbox, det_score, embedding}` where embedding is a 512-float
+      // ArcFace vector (already L2-normalized so cosine == dot).
+      interface FaceFromEndpoint {
+        bbox: [number, number, number, number];
+        det_score: number;
+        embedding: number[];
+      }
+
+      // pgvector accepts a `[v1,v2,...]` literal cast to ::vector. We do
+      // the cast at the call site so the column type stays opaque to the
+      // pg driver.
+      function _toPgVector(emb: number[]): string {
+        return "[" + emb.map((v) => Number(v).toString()).join(",") + "]";
+      }
+
+      function _extractFaces(raw: unknown): FaceFromEndpoint[] {
+        let body: unknown = raw;
+        if (raw && typeof raw === "object" && "ok" in raw) {
+          const wrapped = raw as { ok: boolean; data?: unknown };
+          if (!wrapped.ok) return [];
+          if ("data" in wrapped) body = wrapped.data;
+        }
+        if (typeof body === "string") {
+          try {
+            body = JSON.parse(body);
+          } catch {
+            return [];
+          }
+        }
+        let items: unknown[] = [];
+        if (Array.isArray(body)) items = body;
+        else if (body && typeof body === "object") {
+          const obj = body as Record<string, unknown>;
+          if (Array.isArray(obj.predictions)) items = obj.predictions;
+        }
+        // PyFunc returns one list per row, so we get [[face, face], ...]
+        // for a single-row request. Flatten to the first row.
+        if (items.length > 0 && items.every((x) => Array.isArray(x))) {
+          items = items.flat();
+        }
+        const out: FaceFromEndpoint[] = [];
+        for (const c of items) {
+          if (!c || typeof c !== "object") continue;
+          const rec = c as Record<string, unknown>;
+          const bbox = Array.isArray(rec.bbox) && rec.bbox.length === 4
+            ? (rec.bbox.map((n) => Math.round(Number(n))) as [number, number, number, number])
+            : null;
+          const emb = Array.isArray(rec.embedding) ? rec.embedding.map((v) => Number(v)) : null;
+          if (!bbox || !emb || emb.length === 0) continue;
+          out.push({
+            bbox,
+            det_score: typeof rec.det_score === "number" ? rec.det_score : 0,
+            embedding: emb,
+          });
+        }
+        return out;
+      }
+
+      async function _embedFaces(image: string): Promise<FaceFromEndpoint[]> {
+        // invokeServing throws EndpointNotDeployedError when the alias
+        // points at an endpoint that hasn't been provisioned yet. The
+        // /api/faces and /api/face-match routes funnel that through
+        // sendEndpointError() so the client gets a structured 503 it
+        // can branch on without regex-matching the error string.
+        const data = await invokeServing(appkit, "face_recognition", {
+          dataframe_records: [{ image }],
+        });
+        return _extractFaces(data);
+      }
+
+      // POST /api/faces
+      //   Body: { name, role, image (b64 data URL or raw b64) }
+      //   Detects faces in the image, picks the largest (closest to camera),
+      //   stores the row, and returns the new face id + thumbnail. If no
+      //   face is detected returns 422 so the client can surface a friendly
+      //   "couldn't see a face in that photo" message.
+      app.post("/api/faces", async (req, res) => {
+        const body = req.body as { name?: unknown; role?: unknown; image?: unknown } | undefined;
+        const name = typeof body?.name === "string" ? body.name.trim() : "";
+        const role = typeof body?.role === "string" ? body.role.trim().toLowerCase() : "";
+        const image = typeof body?.image === "string" ? body.image : "";
+        if (!name || !["banned", "vip", "staff"].includes(role) || !image) {
+          res.status(400).json({ error: "Body needs name (string), role (banned|vip|staff), image (b64)." });
+          return;
+        }
+        try {
+          await _ensureFacesTables();
+          const faces = await _embedFaces(image);
+          if (faces.length === 0) {
+            res.status(422).json({ error: "No face detected in the uploaded image." });
+            return;
+          }
+          // Pick the largest bbox (face closest to the camera) - works
+          // around photos where a background bystander also got embedded.
+          const primary = faces.reduce((best, f) => {
+            const aBest = (best.bbox[2] - best.bbox[0]) * (best.bbox[3] - best.bbox[1]);
+            const aCur = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]);
+            return aCur > aBest ? f : best;
+          });
+          // Defensive cap on the thumbnail size so a misbehaving client
+          // can't wedge the postgres row. ~750KB matches the plate
+          // image cap; legit thumbnails are <50KB.
+          const thumbnail = image.length <= 750_000 ? image : null;
+          const insert = await appkit.lakebase.query<{ id: number; created_at: string }>(
+            `INSERT INTO faces (name, role, image, embedding, det_score)
+             VALUES ($1, $2, $3, $4::vector, $5)
+             RETURNING id, created_at`,
+            [name, role, thumbnail, _toPgVector(primary.embedding), primary.det_score],
+          );
+          res.json({ id: insert.rows[0]?.id, name, role, created_at: insert.rows[0]?.created_at });
+        } catch (err) {
+          if (sendEndpointError(res, err)) return;
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Face enrollment failed: ${message}` });
+        }
+      });
+
+      // GET /api/faces  -> list of enrolled faces (no embeddings - the
+      // raw 512-float vector is just noise for the UI).
+      app.get("/api/faces", async (_req, res) => {
+        try {
+          await _ensureFacesTables();
+          const result = await appkit.lakebase.query<{
+            id: number; name: string; role: string; image: string | null;
+            det_score: number | null; created_at: string;
+          }>(
+            "SELECT id, name, role, image, det_score, created_at FROM faces ORDER BY created_at DESC",
+          );
+          res.json({ faces: result.rows });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase query failed: ${message}` });
+        }
+      });
+
+      // DELETE /api/faces/:id
+      app.delete("/api/faces/:id", async (req, res) => {
+        const id = Number(req.params.id);
+        if (!Number.isFinite(id) || id <= 0) {
+          res.status(400).json({ error: "Invalid id." });
+          return;
+        }
+        try {
+          await _ensureFacesTables();
+          const result = await appkit.lakebase.query(
+            "DELETE FROM faces WHERE id = $1",
+            [id],
+          );
+          res.json({ deleted: result.rowCount ?? 0 });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase delete failed: ${message}` });
+        }
+      });
+
+      // POST /api/face-match
+      //   Body: { image (b64), source_id?, min_similarity? (default 0.45),
+      //           persist? (default true) }
+      //   Returns: { faces: [{bbox, det_score, match: {face_id, name, role,
+      //                                                similarity} | null}] }
+      //
+      // When a face is matched above threshold AND persist=true, inserts a
+      // face_matches row. Per-face dedup: we only insert a new row for a
+      // given face_id once per FACE_MATCH_DEDUP_MS window so a subject
+      // hanging in front of the camera doesn't fill the table.
+      const FACE_MATCH_DEDUP_MS = 30_000;
+      // Cosine similarity floor. ArcFace w600k_r50 lit reports
+      // ~0.65 at the same-identity median, 0.30 at the impostor 99th
+      // percentile. 0.45 keeps recall while staying clear of impostor
+      // noise on a small enrolled population.
+      const FACE_MATCH_DEFAULT_THRESHOLD = 0.45;
+      // Per face_id -> last persisted ts. Process-local; that's fine for
+      // the booth demo (single replica) and dedupes inside the user's
+      // session. A second replica would just dedupe independently.
+      const _faceMatchLastTs = new Map<number, number>();
+
+      app.post("/api/face-match", async (req, res) => {
+        const body = req.body as {
+          image?: unknown; source_id?: unknown; min_similarity?: unknown; persist?: unknown;
+        } | undefined;
+        const image = typeof body?.image === "string" ? body.image : "";
+        const source_id = typeof body?.source_id === "string" ? body.source_id : "webcam";
+        const persist = body?.persist !== false;
+        const min_similarity = typeof body?.min_similarity === "number"
+          ? body.min_similarity : FACE_MATCH_DEFAULT_THRESHOLD;
+        if (!image) {
+          res.status(400).json({ error: "Body needs `image` (b64)." });
+          return;
+        }
+
+        let faces: FaceFromEndpoint[] = [];
+        try {
+          faces = await _embedFaces(image);
+        } catch (err) {
+          if (sendEndpointError(res, err)) return;
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(502).json({ error: `Face endpoint failed: ${message}` });
+          return;
+        }
+
+        try {
+          await _ensureFacesTables();
+        } catch (err) {
+          // Don't fail the whole request if table-init fails (the model
+          // already returned faces); just skip match + persist.
+          const message = err instanceof Error ? err.message : String(err);
+          res.json({ faces: faces.map((f) => ({ bbox: f.bbox, det_score: f.det_score, match: null })), warning: message });
+          return;
+        }
+
+        // For each detected face, run a single pgvector cosine match.
+        // We could batch with a UNION but the per-frame face count is
+        // small (1-4) so the round-trip cost is negligible.
+        const out: Array<{
+          bbox: [number, number, number, number];
+          det_score: number;
+          match: { face_id: number; name: string; role: string; similarity: number; image: string | null } | null;
+        }> = [];
+
+        for (const face of faces) {
+          let match: { face_id: number; name: string; role: string; similarity: number; image: string | null } | null = null;
+          try {
+            // 1 - cosine_distance = cosine_similarity. With L2-normalized
+            // ArcFace embeddings this is just the dot product, but using
+            // the `<=>` operator + HNSW index keeps performance constant
+            // as the enrolled set grows.
+            const r = await appkit.lakebase.query<{
+              id: number; name: string; role: string; image: string | null; similarity: number;
+            }>(
+              `SELECT id, name, role, image,
+                      1 - (embedding <=> $1::vector) AS similarity
+               FROM faces
+               ORDER BY embedding <=> $1::vector
+               LIMIT 1`,
+              [_toPgVector(face.embedding)],
+            );
+            const row = r.rows[0];
+            if (row && row.similarity >= min_similarity) {
+              match = {
+                face_id: row.id, name: row.name, role: row.role,
+                similarity: row.similarity, image: row.image,
+              };
+            }
+          } catch (err) {
+            // Don't surface DB errors per-face; the bbox still renders.
+            console.warn("face match query failed:", err);
+          }
+          out.push({ bbox: face.bbox, det_score: face.det_score, match });
+
+          if (match && persist) {
+            const last = _faceMatchLastTs.get(match.face_id) ?? 0;
+            const now = Date.now();
+            if (now - last >= FACE_MATCH_DEDUP_MS) {
+              _faceMatchLastTs.set(match.face_id, now);
+              try {
+                // Cap the frame snapshot stored with the match row -
+                // 750KB matches the plate image cap.
+                const frame_image = image.length <= 750_000 ? image : null;
+                await appkit.lakebase.query(
+                  `INSERT INTO face_matches
+                     (source_id, face_id, name, role, similarity,
+                      bbox_x1, bbox_y1, bbox_x2, bbox_y2, frame_image)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+                  [
+                    source_id, match.face_id, match.name, match.role, match.similarity,
+                    face.bbox[0], face.bbox[1], face.bbox[2], face.bbox[3], frame_image,
+                  ],
+                );
+              } catch (err) {
+                console.warn("face_matches insert failed:", err);
+              }
+            }
+          }
+        }
+
+        res.json({ faces: out });
+      });
+
+      // GET /api/face-matches/recent?limit=50
+      app.get("/api/face-matches/recent", async (req, res) => {
+        const limitRaw = Number(req.query.limit ?? 50);
+        const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
+        try {
+          await _ensureFacesTables();
+          const r = await appkit.lakebase.query<{
+            id: number; ts: string; source_id: string; face_id: number | null;
+            name: string; role: string; similarity: number;
+            bbox_x1: number; bbox_y1: number; bbox_x2: number; bbox_y2: number;
+            frame_image: string | null; enrolled_image: string | null;
+          }>(
+            `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
+                    m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
+                    f.image AS enrolled_image
+             FROM face_matches m
+             LEFT JOIN faces f ON f.id = m.face_id
+             ORDER BY m.ts DESC LIMIT $1`,
+            [limit],
+          );
+          res.json({ rows: r.rows });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          res.status(500).json({ error: `Lakebase query failed: ${message}` });
+        }
+      });
+
+      // GET /api/face-matches/stream  -> SSE of new face_matches rows.
+      // Mirrors /api/detections/stream so the Facial Recognition page can
+      // append to its "recent matches" list as they land.
+      app.get("/api/face-matches/stream", async (req, res) => {
+        res.setHeader("Content-Type", "text/event-stream");
+        res.setHeader("Cache-Control", "no-cache");
+        res.setHeader("Connection", "keep-alive");
+        res.flushHeaders?.();
+        try {
+          await _ensureFacesTables();
+        } catch (err) {
+          // Soft-fail; we still want to keep the connection open so the
+          // client doesn't tear down + reconnect in a loop.
+          const message = err instanceof Error ? err.message : String(err);
+          res.write(`event: error\ndata: ${JSON.stringify({ message })}\n\n`);
+        }
+
+        let lastTs = new Date(Date.now() - 30_000).toISOString();
+        let stopped = false;
+        const writeEvent = (event: string, payload: unknown) => {
+          res.write(`event: ${event}\n`);
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        };
+        writeEvent("hello", { ok: true, since: lastTs });
+
+        const heartbeat = setInterval(() => {
+          if (!stopped) res.write(": keep-alive\n\n");
+        }, SSE_HEARTBEAT_MS);
+
+        const tick = async () => {
+          if (stopped) return;
+          try {
+            const r = await appkit.lakebase.query<{
+              id: number; ts: string; source_id: string; face_id: number | null;
+              name: string; role: string; similarity: number;
+              bbox_x1: number; bbox_y1: number; bbox_x2: number; bbox_y2: number;
+              frame_image: string | null; enrolled_image: string | null;
+            }>(
+              `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
+                      m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
+                      f.image AS enrolled_image
+               FROM face_matches m
+               LEFT JOIN faces f ON f.id = m.face_id
+               WHERE m.ts > $1::timestamptz
+               ORDER BY m.ts ASC LIMIT 50`,
+              [lastTs],
+            );
+            for (const row of r.rows) {
+              writeEvent("match", row);
+              if (row.ts > lastTs) lastTs = row.ts;
+            }
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            writeEvent("error", { message });
+          }
+        };
+        const interval = setInterval(tick, POLL_INTERVAL_MS);
+        void tick();
+
+        req.on("close", () => {
+          stopped = true;
+          clearInterval(interval);
+          clearInterval(heartbeat);
+          res.end();
+        });
       });
 
       app.get("/api/guest-counts/recent", async (req, res) => {

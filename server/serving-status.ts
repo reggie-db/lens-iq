@@ -1,20 +1,5 @@
 import { CacheManager, getExecutionContext } from "@databricks/appkit";
-
-// Map from AppKit `serving()` alias to the env var the platform sets when a
-// resource binding from resources/app.yml resolves. Must stay aligned with
-// the `serving()` plugin call in server.ts and the `servingAlias` values in
-// client/src/lib/models.ts. Aliases not in this map resolve to an empty
-// endpoint name and the readiness probe short-circuits to NOT_CONFIGURED.
-const SERVING_ALIAS_ENV: Record<string, string> = {
-  llm: "DATABRICKS_SERVING_ENDPOINT_LLM",
-  detector: "DATABRICKS_SERVING_ENDPOINT_DETECTOR",
-  license_plate: "DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE",
-  spill: "DATABRICKS_SERVING_ENDPOINT_SPILL",
-  wet_floor_sign: "DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN",
-  cigarette_vape: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE",
-  slip_fall: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL",
-  fog_detector: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR",
-};
+import { resolveServingEndpointName } from "./serving-aliases";
 
 /** TTL (seconds) for cached serving endpoint readiness lookups. */
 export const SERVING_STATUS_CACHE_TTL_SEC = 45;
@@ -25,13 +10,6 @@ export interface ServingStatus {
   ready: boolean;
   state: string;
   checked_at: string;
-}
-
-function _resolveEndpointName(alias: string): string | null {
-  const envVar = SERVING_ALIAS_ENV[alias];
-  if (!envVar) return null;
-  const name = process.env[envVar];
-  return name && name.length > 0 ? name : null;
 }
 
 function _readinessFromEndpoint(endpoint: {
@@ -71,7 +49,7 @@ export async function getServingStatus(
   alias: string,
   options: { force?: boolean } = {},
 ): Promise<ServingStatus> {
-  const endpointName = _resolveEndpointName(alias);
+  const endpointName = resolveServingEndpointName(alias);
   if (!endpointName) {
     return {
       alias,

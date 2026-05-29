@@ -52,6 +52,10 @@ resources:
           serving_endpoint:
             name: ${var.fog_detector_endpoint}
             permission: CAN_QUERY
+        - name: face_recognition
+          serving_endpoint:
+            name: ${var.face_recognition_endpoint}
+            permission: CAN_QUERY
         # LensIQ Detections Genie space. Commented out until the chat
         # surface in the app wires this through. The space itself lives
         # in resources/genie_space_lensiq_detections.json and is created

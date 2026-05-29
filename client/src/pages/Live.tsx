@@ -10,14 +10,16 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import {
   SNAPSHOT_MAX_DIMENSION,
   captureVideoFrameForDetection,
-  requestCameraStream,
   scaleDetectionBbox,
-  stopMediaStream,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
 import { MODELS, DEFAULT_MODEL_ID, getModel } from "../lib/models";
 import { fetchServingStatus } from "../lib/serving-status";
-import { SAMPLE_VIDEOS, defaultSampleForModel, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo } from "../lib/samples";
+import { useWebcamStream } from "../lib/useWebcamStream";
+import { useSampleVideoStream } from "../lib/useSampleVideoStream";
+import { useDetectionLoop } from "../lib/useDetectionLoop";
+import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 
 // Sources the user can feed into the detector. "webcam" is the default; the
 // other entries map onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
@@ -62,8 +64,6 @@ interface LivePageProps {
 export function LivePage({ isActive }: LivePageProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const trackRef = useRef<MediaStreamTrack | null>(null);
-  const inFlightRef = useRef<boolean>(false);
 
   const [fps, setFps] = useState<number>(DEFAULT_FPS);
   const [status, setStatus] = useState<string>("");
@@ -80,98 +80,57 @@ export function LivePage({ isActive }: LivePageProps) {
   const [pendingSince, setPendingSince] = useState<number | null>(null);
   const [endpointReady, setEndpointReady] = useState(true);
   const [endpointState, setEndpointState] = useState("");
-  const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
   const activeModel = useMemo(() => getModel(modelId) ?? MODELS[0], [modelId]);
   const activeSample = useMemo(
     () => (sourceId === WEBCAM_SOURCE_ID ? null : getSampleVideo(sourceId) ?? null),
     [sourceId],
   );
 
-  // Manage the <video> element's source. For webcam we attach a MediaStream
-  // (live device feed). For sample videos we set `src` to a proxied URL that
-  // streams the upstream Roboflow MP4 with CORS headers, so canvas captures
-  // don't taint and the detection loop keeps working.
+  // Source switcher: exactly one of (webcam, sample) is active at a time.
+  // Both hooks gate on `isActive` so the inactive one stays idle and
+  // releases the <video> element for the other to own. The webcam hook's
+  // cleanup also clears srcObject when the user switches *to* a sample,
+  // which lets the sample hook's `video.src = ...` take over cleanly.
+  const webcamActive = isActive && sourceId === WEBCAM_SOURCE_ID;
+  const sampleActive = isActive && sourceId !== WEBCAM_SOURCE_ID;
+  const { videoSize: webcamVideoSize, status: cameraStatus } = useWebcamStream(videoRef, {
+    isActive: webcamActive,
+    facingMode: "environment",
+  });
+  const { videoSize: sampleVideoSizeFromHook, status: sampleStatus } = useSampleVideoStream(videoRef, {
+    isActive: sampleActive,
+    sample: activeSample,
+  });
+
+  // Mirror whichever source's status the user is currently looking at
+  // into the page's status pill. Picking the right source means a sample
+  // load error doesn't leak into webcam mode and vice versa.
   useEffect(() => {
-    if (!isActive) return;
-    const video = videoRef.current;
-    if (!video) return;
-
-    let cancelled = false;
-
-    const attachWebcam = async () => {
-      const result = await requestCameraStream("environment");
-      if (cancelled) {
-        stopMediaStream(result.stream);
-        return;
-      }
-      if (!result.stream) {
-        setStatus(result.message);
-        setStatusKind("error");
-        return;
-      }
-      const stream = result.stream;
-      video.srcObject = stream;
-      video.src = "";
-      video.loop = false;
-      video.muted = true;
-      trackRef.current = stream.getVideoTracks()[0] ?? null;
-      const settings = trackRef.current?.getSettings();
-      setStatus(`Camera ready (${settings?.width ?? "?"}x${settings?.height ?? "?"})`);
-      setStatusKind("info");
-      await video.play().catch(() => undefined);
-    };
-
-    const attachSample = async (sampleId: string) => {
-      const sample = getSampleVideo(sampleId);
-      if (!sample) {
-        setStatus(`Unknown sample: ${sampleId}`);
-        setStatusKind("error");
-        return;
-      }
-      video.srcObject = null;
-      trackRef.current = null;
-      video.crossOrigin = "anonymous";
-      video.loop = true;
-      video.muted = true;
-      video.src = sampleVideoUrl(sample);
-      setStatus("Loading sample...");
-      setStatusKind("info");
-      await video.play().catch(() => undefined);
-    };
-
     if (sourceId === WEBCAM_SOURCE_ID) {
-      void attachWebcam();
-    } else {
-      void attachSample(sourceId);
+      if (cameraStatus.kind === "ready" || cameraStatus.kind === "loading") {
+        setStatus(cameraStatus.message);
+        setStatusKind("info");
+      } else if (cameraStatus.kind !== "idle") {
+        setStatus(cameraStatus.message);
+        setStatusKind("error");
+      }
+      return;
     }
-
-    const syncVideoSize = () => {
-      setVideoSize({
-        w: video.videoWidth || 0,
-        h: video.videoHeight || 0,
-      });
-    };
-    const onError = () => {
-      if (sourceId === WEBCAM_SOURCE_ID) return;
+    if (sampleStatus.kind === "loading") {
+      setStatus(sampleStatus.message);
+      setStatusKind("info");
+    } else if (sampleStatus.kind === "error") {
+      setStatus(sampleStatus.message);
       setStatusKind("error");
-      void describeClipFailure(sourceId).then(setStatus);
-    };
-    video.addEventListener("loadedmetadata", syncVideoSize);
-    video.addEventListener("resize", syncVideoSize);
-    video.addEventListener("error", onError);
+    } else if (sampleStatus.kind === "playing") {
+      // Don't clobber the detector's own messages once playback starts;
+      // the detector tick body owns the status from here on.
+      setStatus((prev) => (prev === "Loading clip..." || prev === "Loading sample..." ? "" : prev));
+    }
+  }, [cameraStatus, sampleStatus, sourceId]);
 
-    return () => {
-      cancelled = true;
-      video.removeEventListener("loadedmetadata", syncVideoSize);
-      video.removeEventListener("resize", syncVideoSize);
-      video.removeEventListener("error", onError);
-      stopMediaStream((video.srcObject as MediaStream | null) ?? null);
-      video.srcObject = null;
-      video.removeAttribute("src");
-      video.load();
-      trackRef.current = null;
-    };
-  }, [isActive, sourceId]);
+  // Use the intrinsic resolution from whichever source is currently active.
+  const videoSize = sourceId === WEBCAM_SOURCE_ID ? webcamVideoSize : sampleVideoSizeFromHook;
 
   // Cached GET /api/serving-status/:alias - the AppKit CacheManager fronts
   // the Workspace API so we can poll cheaply. The overlay reads this state
@@ -208,54 +167,50 @@ export function LivePage({ isActive }: LivePageProps) {
     void refreshServingStatus(true);
   }, [pendingSince, now, endpointReady, refreshServingStatus]);
 
-  useEffect(() => {
-    if (!isActive) return;
+  const tickIntervalMs = useMemo(() => {
     const clamped = Math.max(MIN_FPS, Math.min(MAX_FPS, fps));
-    const intervalMs = 1000 / clamped;
+    return 1000 / clamped;
+  }, [fps]);
 
-    const tick = async () => {
-      if (inFlightRef.current || !videoRef.current) return;
-      const frame = captureVideoFrameForDetection(videoRef.current);
-      if (!frame) return;
-      inFlightRef.current = true;
-      setPendingSince(Date.now());
-      try {
-        const result = await callDetector(frame.image, { model: modelId });
-        const scaled = result.detections.map((d) => ({
-          ...d,
-          bbox: scaleDetectionBbox(d.bbox, frame.scaleX, frame.scaleY),
-        }));
-        setDetections(scaled);
-        const ts = Date.now();
-        const newEntries: HistoryEntry[] = scaled.map((d) => ({ ts, label: d.label }));
-        if (newEntries.length > 0) {
-          setHistory((prev) => {
-            const cutoff = ts - HISTORY_WINDOW_MS;
-            const trimmed = prev.length > 0 && prev[0].ts < cutoff
-              ? prev.filter((e) => e.ts >= cutoff)
-              : prev;
-            return [...trimmed, ...newEntries];
-          });
-        }
-        setStatus(
-          scaled.length > 0
-            ? `Detected ${scaled.length} object(s)`
-            : "No objects detected in this frame",
-        );
-        setStatusKind("info");
-      } catch (err) {
-        setDetections([]);
-        setStatus(err instanceof Error ? err.message : String(err));
-        setStatusKind("error");
-      } finally {
-        inFlightRef.current = false;
-        setPendingSince(null);
+  const tick = useCallback(async () => {
+    if (!videoRef.current) return;
+    const frame = captureVideoFrameForDetection(videoRef.current);
+    if (!frame) return;
+    setPendingSince(Date.now());
+    try {
+      const result = await callDetector(frame.image, { model: modelId });
+      const scaled = result.detections.map((d) => ({
+        ...d,
+        bbox: scaleDetectionBbox(d.bbox, frame.scaleX, frame.scaleY),
+      }));
+      setDetections(scaled);
+      const ts = Date.now();
+      const newEntries: HistoryEntry[] = scaled.map((d) => ({ ts, label: d.label }));
+      if (newEntries.length > 0) {
+        setHistory((prev) => {
+          const cutoff = ts - HISTORY_WINDOW_MS;
+          const trimmed = prev.length > 0 && prev[0].ts < cutoff
+            ? prev.filter((e) => e.ts >= cutoff)
+            : prev;
+          return [...trimmed, ...newEntries];
+        });
       }
-    };
+      setStatus(
+        scaled.length > 0
+          ? `Detected ${scaled.length} object(s)`
+          : "No objects detected in this frame",
+      );
+      setStatusKind("info");
+    } catch (err) {
+      setDetections([]);
+      setStatus(err instanceof Error ? err.message : String(err));
+      setStatusKind("error");
+    } finally {
+      setPendingSince(null);
+    }
+  }, [modelId]);
 
-    const id = setInterval(tick, intervalMs);
-    return () => clearInterval(id);
-  }, [fps, isActive, modelId]);
+  useDetectionLoop({ isActive, intervalMs: tickIntervalMs, tick });
 
   // When the user switches model, wipe stale state so the new model starts
   // with a clean rolling-window panel and no leftover bounding boxes.
@@ -276,36 +231,20 @@ export function LivePage({ isActive }: LivePageProps) {
     return () => clearInterval(id);
   }, [isActive]);
 
+  const overlayBoxes: OverlayBox[] = useMemo(
+    () =>
+      detections.map((d) => ({
+        bbox: d.bbox,
+        color: activeModel.color,
+        label: `${d.label} ${(d.confidence * 100).toFixed(0)}%`,
+        fillAlpha: 0,
+      })),
+    [detections, activeModel.color],
+  );
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
-    const w = videoSize.w || video.videoWidth || 1280;
-    const h = videoSize.h || video.videoHeight || 720;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (detections.length === 0) return;
-    const color = activeModel.color;
-    const fillColor = _hexToRgba(color, 0.9);
-    ctx.lineWidth = Math.max(2, Math.round(canvas.width / 400));
-    ctx.font = `${Math.max(14, Math.round(canvas.width / 60))}px sans-serif`;
-    for (const d of detections) {
-      const [x1, y1, x2, y2] = d.bbox;
-      ctx.strokeStyle = color;
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
-      const padding = 4;
-      const labelHeight = Math.max(18, Math.round(canvas.width / 50));
-      const tw = ctx.measureText(label).width + padding * 2;
-      ctx.fillStyle = fillColor;
-      ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
-      ctx.fillStyle = "white";
-      ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
-    }
-  }, [detections, activeModel, videoSize]);
+    drawBboxOverlay(canvasRef.current, videoRef.current, videoSize, overlayBoxes);
+  }, [overlayBoxes, videoSize]);
 
   const handleSaveSnapshot = async () => {
     if (!videoRef.current || saving) return;

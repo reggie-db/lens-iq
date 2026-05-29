@@ -11,7 +11,9 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, describeClipFailure, getSampleVideo, sampleVideoUrl } from "../lib/samples";
+import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // Camera Clarity view.
 //
@@ -445,48 +447,14 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const inFlightRef = useRef(false);
   const [detections, setDetections] = useState<Detection[]>([]);
-  const [videoSize, setVideoSize] = useState({ w: 0, h: 0 });
-  const [status, setStatus] = useState<string>("");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [detectorStatus, setDetectorStatus] = useState<string>("");
+  const [detectorError, setDetectorError] = useState<string | null>(null);
 
-  const sample = useMemo(() => getSampleVideo(config.sourceId), [config.sourceId]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const video = videoRef.current;
-    if (!video || !sample) return;
-    video.crossOrigin = "anonymous";
-    video.loop = true;
-    video.muted = true;
-    video.src = sampleVideoUrl(sample);
-    setStatus("Loading clip...");
-    setErrorMessage(null);
-    void video.play().catch(() => undefined);
-
-    const syncVideoSize = () => {
-      setVideoSize({ w: video.videoWidth || 0, h: video.videoHeight || 0 });
-    };
-    // The browser fires `error` when the URL 404s or the bytes can't be
-    // decoded. Without this handler the status string would hang on
-    // "Loading clip..." forever because `loadedmetadata` never fires.
-    // describeClipFailure() pulls the actual server-side error body (e.g.
-    // "Sample X not found locally or in the sample_videos volume.") so the
-    // banner shows the real cause instead of a generic placeholder.
-    const onError = () => {
-      setStatus("Clip unavailable");
-      void describeClipFailure(sample).then(setErrorMessage);
-    };
-    video.addEventListener("loadedmetadata", syncVideoSize);
-    video.addEventListener("resize", syncVideoSize);
-    video.addEventListener("error", onError);
-    return () => {
-      video.removeEventListener("loadedmetadata", syncVideoSize);
-      video.removeEventListener("resize", syncVideoSize);
-      video.removeEventListener("error", onError);
-      video.removeAttribute("src");
-      video.load();
-    };
-  }, [isActive, sample]);
+  const sample = useMemo(() => getSampleVideo(config.sourceId) ?? null, [config.sourceId]);
+  const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
+    isActive,
+    sample,
+  });
 
   useEffect(() => {
     if (!isActive) return;
@@ -507,7 +475,7 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
         // `clear` bbox when no fog is found - that's a signal, not something
         // to render as a giant rectangle.
         setDetections(fogged);
-        setErrorMessage(null);
+        setDetectorError(null);
 
         const frameW = video.videoWidth || 1;
         const frameH = video.videoHeight || 1;
@@ -527,15 +495,15 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
           incidentJustOpened: false,
         });
 
-        setStatus(
+        setDetectorStatus(
           fogged.length > 0
             ? `${fogged.length} fogged region${fogged.length === 1 ? "" : "s"} - ${areaPct.toFixed(1)}% of frame`
             : "Lens clear",
         );
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
-        setErrorMessage(message);
-        setStatus("Detector unavailable");
+        setDetectorError(message);
+        setDetectorStatus("Detector unavailable");
       } finally {
         inFlightRef.current = false;
       }
@@ -544,41 +512,25 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
     return () => clearInterval(id);
   }, [isActive, config.sourceId, config.cameraLabel, onSample]);
 
+  // Semi-transparent fill draws the user's eye to the affected region
+  // without fully obscuring the underlying CCTV. The shared overlay
+  // uses the bbox color for both stroke and fill; we tint with 18%
+  // alpha to match the prior camera-health look.
+  const overlayBoxes: OverlayBox[] = useMemo(
+    () =>
+      detections.map((d) => ({
+        bbox: d.bbox,
+        color: COLOR_FOG,
+        label: `FOGGED  ${(d.confidence * 100).toFixed(0)}%`,
+        fillAlpha: 0.18,
+        labelAlpha: 1,
+      })),
+    [detections],
+  );
+
   useEffect(() => {
-    const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video) return;
-    const w = videoSize.w || video.videoWidth || 1280;
-    const h = videoSize.h || video.videoHeight || 720;
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (detections.length === 0) return;
-    ctx.lineWidth = Math.max(3, Math.round(canvas.width / 300));
-    const fontSize = Math.max(14, Math.round(canvas.width / 55));
-    ctx.font = `${fontSize}px sans-serif`;
-    for (const d of detections) {
-      const [x1, y1, x2, y2] = d.bbox;
-      const w = x2 - x1;
-      const h = y2 - y1;
-      // Semi-transparent fill draws the user's eye to the affected region
-      // without fully obscuring the underlying CCTV.
-      ctx.fillStyle = "rgba(220, 38, 38, 0.18)";
-      ctx.fillRect(x1, y1, w, h);
-      ctx.strokeStyle = COLOR_FOG;
-      ctx.strokeRect(x1, y1, w, h);
-      const label = `FOGGED  ${(d.confidence * 100).toFixed(0)}%`;
-      const padding = 6;
-      const labelHeight = Math.max(20, Math.round(canvas.width / 45));
-      const tw = ctx.measureText(label).width + padding * 2;
-      ctx.fillStyle = COLOR_FOG;
-      ctx.fillRect(x1, Math.max(0, y1 - labelHeight), tw, labelHeight);
-      ctx.fillStyle = "white";
-      ctx.fillText(label, x1 + padding, Math.max(labelHeight - padding, y1 - padding));
-    }
-  }, [detections, videoSize]);
+    drawBboxOverlay(canvasRef.current, videoRef.current, videoSize, overlayBoxes);
+  }, [overlayBoxes, videoSize]);
 
   // Verdict drives the corner badge color: green when clear, yellow during a
   // brief spike (1-2 consecutive fogged ticks), red once a sustained fog
@@ -644,11 +596,15 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
           )}
         </div>
         <div className="text-xs text-slate-500 flex items-center gap-1.5">
-          {status === "Loading clip..." ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
-          {status || "Initializing..."}
+          {videoStatus.kind === "loading" ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+          {videoStatus.kind === "loading"
+            ? videoStatus.message
+            : videoStatus.kind === "error"
+            ? videoStatus.message
+            : detectorStatus || "Initializing..."}
         </div>
-        {errorMessage && (
-          <div className="text-xs text-red-600 break-words">{errorMessage}</div>
+        {detectorError && videoStatus.kind !== "error" && (
+          <div className="text-xs text-red-600 break-words">{detectorError}</div>
         )}
         <div className="grid grid-cols-3 gap-3 text-xs text-slate-600 pt-1">
           <div>

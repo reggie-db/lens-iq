@@ -12,6 +12,7 @@ import {
 } from "@databricks/appkit-ui/react";
 import { Activity, Camera, Workflow } from "lucide-react";
 import type { PipelineDetection, PipelineFrame } from "../lib/queries";
+import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 
 // Continuous detection pipeline view.
 //
@@ -63,30 +64,31 @@ function FrameCard({ frame }: FrameCardProps) {
     [frame.detections_json],
   );
 
+  // drawBboxOverlay normally takes a <video> + intrinsic videoSize; here
+  // we pass the still image's natural pixels instead so the canvas sizes
+  // to the actual image, not the CSS-fitted display size.
+  const overlayBoxes: OverlayBox[] = useMemo(
+    () =>
+      detections.map((d) => ({
+        bbox: d.bbox,
+        color: "#dc2626",
+        label: `${d.label} ${(d.confidence * 100).toFixed(0)}%`,
+        fillAlpha: 0,
+        labelAlpha: 0.85,
+      })),
+    [detections],
+  );
+
   useEffect(() => {
-    if (!loaded || !imgRef.current || !canvasRef.current) return;
+    if (!loaded || !imgRef.current) return;
     const img = imgRef.current;
-    const canvas = canvasRef.current;
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = Math.max(2, Math.round(canvas.width / 320));
-    ctx.font = `${Math.max(12, Math.round(canvas.width / 60))}px sans-serif`;
-    for (const d of detections) {
-      const [x1, y1, x2, y2] = d.bbox;
-      ctx.strokeStyle = "#dc2626";
-      ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-      const label = `${d.label} ${(d.confidence * 100).toFixed(0)}%`;
-      const labelW = ctx.measureText(label).width + 8;
-      const labelH = Math.max(16, Math.round(canvas.width / 50));
-      ctx.fillStyle = "rgba(220, 38, 38, 0.85)";
-      ctx.fillRect(x1, Math.max(0, y1 - labelH), labelW, labelH);
-      ctx.fillStyle = "white";
-      ctx.fillText(label, x1 + 4, Math.max(labelH - 4, y1 - 4));
-    }
-  }, [detections, loaded]);
+    drawBboxOverlay(
+      canvasRef.current,
+      null,
+      { w: img.naturalWidth, h: img.naturalHeight },
+      overlayBoxes,
+    );
+  }, [overlayBoxes, loaded]);
 
   return (
     <Card>
