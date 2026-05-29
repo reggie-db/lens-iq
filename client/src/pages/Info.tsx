@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { marked } from "marked";
 import {
   Badge, Button, Card, CardContent, CardHeader, CardTitle,
@@ -6,7 +6,12 @@ import {
   SelectTrigger, SelectValue, Skeleton, Slider,
 } from "@databricks/appkit-ui/react";
 import { Loader2, RotateCcw, Sparkles } from "lucide-react";
-import { fetchJson } from "../lib/serving-status";
+import {
+  customizeTalkTrack,
+  getTalkTrackState,
+  resetTalkTrack,
+  subscribeTalkTrack,
+} from "../lib/talk-track-store";
 
 // The /info page renders the booth talk track (docs/dais-talk-track.md)
 // pulled live from /api/presenter-content/talk-track. That route reads
@@ -17,15 +22,17 @@ import { fetchJson } from "../lib/serving-status";
 // On top of the raw markdown the page exposes three controls - speaker
 // persona, audience persona, and target read time - that ship to the
 // foundation-model rewrite route (POST /api/talk-track/transform).
-// That route is backed by the `llm` serving alias and caches by
-// (source content hash, persona tuple) for an hour. The default state
-// is the full original markdown; the rewritten version is only shown
-// after the presenter explicitly clicks "Customize", and a "Reset to
-// full" button reverts to the original.
 //
-// A small in-memory cache here (keyed by the same persona tuple as the
-// server cache) keeps clicking back and forth between persona settings
-// snappy without re-hitting the network.
+// The rewrite is driven through the module-level talk-track-store so
+// the request survives page navigation. Clicking "Customize" fires a
+// background request, surfaces a sonner toast, and (when the user is
+// still on /info) updates the page in place when the result lands. If
+// the presenter wanders off to /spills mid-rewrite, the toast still
+// fires when it's done and the result is waiting in the store when
+// they come back.
+//
+// The default state is the full original markdown; a "Reset to full"
+// button (or the store's `idle` state on first mount) reverts.
 //
 // The booth deck (HTML slides) lives at its own /deck route - see
 // pages/Deck.tsx - to give it the full viewport.
@@ -62,39 +69,29 @@ const DEFAULT_LENGTH = 5;
 const MIN_LENGTH = 1;
 const MAX_LENGTH = 10;
 
-interface TransformResponse {
-  markdown: string;
-  cached: boolean;
-}
-
-function _cacheKey(speaker: string, audience: string, length: number): string {
-  return `${speaker}|${audience}|${length}`;
-}
-
 export function InfoPage() {
   const [markdown, setMarkdown] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Persona + length controls. They start at sensible defaults but the
-  // page still shows the full original markdown until the presenter
-  // clicks "Customize".
-  const [speakerPersona, setSpeakerPersona] = useState<string>(DEFAULT_SPEAKER);
-  const [audiencePersona, setAudiencePersona] = useState<string>(DEFAULT_AUDIENCE);
-  const [lengthMinutes, setLengthMinutes] = useState<number>(DEFAULT_LENGTH);
+  // External store for the rewrite. Lives at module scope so the LLM
+  // call keeps running across /info -> /spills -> /info navigation.
+  const rewrite = useSyncExternalStore(subscribeTalkTrack, getTalkTrackState);
 
-  // Rewrite state. customMarkdown null = show the original; non-null
-  // means we've fetched at least once and are showing that result.
-  const [customMarkdown, setCustomMarkdown] = useState<string | null>(null);
-  const [customLabel, setCustomLabel] = useState<string | null>(null);
-  const [customCached, setCustomCached] = useState<boolean>(false);
-  const [customLoading, setCustomLoading] = useState<boolean>(false);
-  const [customError, setCustomError] = useState<string | null>(null);
-
-  // Client-side rewrite cache. Keyed by (speaker, audience, length).
-  // The server caches too; this layer keeps re-selecting a previous
-  // combination from being a network round-trip.
-  const cacheRef = useRef<Map<string, string>>(new Map());
+  // Persona + length controls. Default-initialised from whatever the
+  // store last applied, so navigating back to /info shows the same
+  // controls that produced the rewrite currently on screen. The store
+  // is the source of truth for the rewrite; these are just inputs to
+  // the next customize call.
+  const [speakerPersona, setSpeakerPersona] = useState<string>(
+    rewrite.appliedOpts?.speakerPersona ?? rewrite.pending?.speakerPersona ?? DEFAULT_SPEAKER,
+  );
+  const [audiencePersona, setAudiencePersona] = useState<string>(
+    rewrite.appliedOpts?.audiencePersona ?? rewrite.pending?.audiencePersona ?? DEFAULT_AUDIENCE,
+  );
+  const [lengthMinutes, setLengthMinutes] = useState<number>(
+    rewrite.appliedOpts?.lengthMinutes ?? rewrite.pending?.lengthMinutes ?? DEFAULT_LENGTH,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -117,46 +114,32 @@ export function InfoPage() {
     return () => { cancelled = true; };
   }, []);
 
-  const handleCustomize = useCallback(async () => {
-    setCustomError(null);
-    const key = _cacheKey(speakerPersona, audiencePersona, lengthMinutes);
-    const hit = cacheRef.current.get(key);
-    if (hit) {
-      setCustomMarkdown(hit);
-      setCustomLabel(`${speakerPersona} -> ${audiencePersona}, ${lengthMinutes} min`);
-      setCustomCached(true);
-      return;
-    }
-    setCustomLoading(true);
-    try {
-      const res = await fetchJson<TransformResponse>("/api/talk-track/transform", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ speakerPersona, audiencePersona, lengthMinutes }),
-      });
-      cacheRef.current.set(key, res.markdown);
-      setCustomMarkdown(res.markdown);
-      setCustomLabel(`${speakerPersona} -> ${audiencePersona}, ${lengthMinutes} min`);
-      setCustomCached(res.cached);
-    } catch (err) {
-      setCustomError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setCustomLoading(false);
-    }
-  }, [speakerPersona, audiencePersona, lengthMinutes]);
+  const handleCustomize = () => {
+    customizeTalkTrack({ speakerPersona, audiencePersona, lengthMinutes });
+  };
 
-  const handleReset = useCallback(() => {
-    setCustomMarkdown(null);
-    setCustomLabel(null);
-    setCustomCached(false);
-    setCustomError(null);
-  }, []);
+  const handleReset = () => {
+    resetTalkTrack();
+  };
 
-  // The markdown actually rendered: the custom rewrite if we have one,
-  // otherwise the full original. Memoised so we don't reparse on every
-  // unrelated state update (persona changes, etc.).
-  const displayedMarkdown = customMarkdown ?? markdown;
-  const html = useMemo(() => marked.parse(displayedMarkdown) as string, [displayedMarkdown]);
+  // The markdown actually rendered: the store's current rewrite when
+  // it's ready, otherwise the full original. Memoised so we don't
+  // reparse on every unrelated state update (slider drag, etc.).
+  const displayedMarkdown = rewrite.status === "ready" && rewrite.markdown
+    ? rewrite.markdown
+    : markdown;
+  const html = useMemo(
+    () => marked.parse(displayedMarkdown) as string,
+    [displayedMarkdown],
+  );
+
+  const isRewriting = rewrite.status === "loading";
+  const pendingLabel = rewrite.pending
+    ? `${rewrite.pending.speakerPersona} -> ${rewrite.pending.audiencePersona}, ${rewrite.pending.lengthMinutes} min`
+    : null;
+  const appliedLabel = rewrite.appliedOpts
+    ? `${rewrite.appliedOpts.speakerPersona} -> ${rewrite.appliedOpts.audiencePersona}, ${rewrite.appliedOpts.lengthMinutes} min`
+    : null;
 
   return (
     <div className="max-w-5xl mx-auto pb-12 space-y-4">
@@ -172,8 +155,9 @@ export function InfoPage() {
             Pick a speaker, an audience, and a target read time. The full
             talk track is rewritten by a Databricks foundation model on
             the <code className="text-xs">llm</code> serving endpoint and
-            cached server-side by content hash. The default view below is
-            the original, unedited markdown.
+            cached server-side by content hash. The rewrite runs in the
+            background - feel free to navigate around the app while it
+            finishes. The default view below is the original markdown.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -238,38 +222,44 @@ export function InfoPage() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              onClick={() => void handleCustomize()}
-              disabled={customLoading || !markdown}
+              onClick={handleCustomize}
+              disabled={!markdown}
               className="gap-1.5"
             >
-              {customLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-              {customLoading ? "Rewriting..." : "Customize talk track"}
+              {isRewriting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+              {isRewriting ? "Rewriting..." : "Customize talk track"}
             </Button>
             <Button
               size="sm"
               variant="outline"
               onClick={handleReset}
-              disabled={customMarkdown == null || customLoading}
+              disabled={rewrite.status === "idle"}
               className="gap-1.5"
             >
               <RotateCcw className="w-4 h-4" />
               Reset to full
             </Button>
 
-            {customLabel && (
+            {isRewriting && pendingLabel && (
               <Badge variant="outline" className="gap-1">
-                <span>{customLabel}</span>
-                {customCached && <span className="text-slate-500">(cached)</span>}
+                <Loader2 className="w-3 h-3 animate-spin" />
+                <span>Rewriting: {pendingLabel}</span>
               </Badge>
             )}
-            {customMarkdown == null && !customLoading && (
+            {!isRewriting && rewrite.status === "ready" && appliedLabel && (
+              <Badge variant="outline" className="gap-1">
+                <span>{appliedLabel}</span>
+                {rewrite.cached && <span className="text-slate-500">(cached)</span>}
+              </Badge>
+            )}
+            {rewrite.status === "idle" && !isRewriting && (
               <Badge variant="outline">Showing full original</Badge>
             )}
           </div>
 
-          {customError && (
+          {rewrite.status === "error" && rewrite.error && (
             <div className="text-sm text-red-600">
-              Rewrite failed: {customError}
+              Rewrite failed: {rewrite.error}
             </div>
           )}
         </CardContent>
@@ -283,11 +273,37 @@ export function InfoPage() {
           </CardContent>
         </Card>
       )}
-      {displayedMarkdown && (
-        <article
-          className="talk-track prose prose-slate max-w-none"
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
+      {/* While a rewrite is in flight we hide the article body entirely
+          (rather than letting the user read a stale version that's
+          about to be replaced) and render a skeleton + status line
+          instead. The toast + persona pill above still tell them what's
+          happening, and the rewrite keeps running even if they leave
+          this page. */}
+      {isRewriting ? (
+        <Card>
+          <CardContent className="py-6 space-y-3">
+            <div className="flex items-center gap-2 text-sm text-slate-600">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span>
+                Rewriting the talk track{pendingLabel ? ` for ${pendingLabel}` : ""}.
+                You can navigate to other pages while this finishes.
+              </span>
+            </div>
+            <Skeleton className="h-6 w-2/3" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+            <Skeleton className="h-4 w-4/6" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-3/4" />
+          </CardContent>
+        </Card>
+      ) : (
+        displayedMarkdown && (
+          <article
+            className="talk-track prose prose-slate max-w-none"
+            dangerouslySetInnerHTML={{ __html: html }}
+          />
+        )
       )}
     </div>
   );

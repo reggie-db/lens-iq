@@ -28,6 +28,9 @@ let _patched = false;
 //   - /api/face-matches : SSE / recent-list polling for the FR page
 //   - /api/serving-status: cold-start poller; already has its own dedicated
 //                          warmup UI on the pages that care.
+//   - /api/talk-track/transform: background LLM rewrite kicked off from
+//                          /info; the page surfaces its own inline
+//                          progress + sonner toast, no global bar needed.
 // Match against the URL path so absolute, relative, and Request-object
 // inputs all behave the same.
 const EXCLUDED_PATHS: readonly string[] = [
@@ -36,6 +39,7 @@ const EXCLUDED_PATHS: readonly string[] = [
   "/api/face-match",
   "/api/face-matches",
   "/api/serving-status",
+  "/api/talk-track/transform",
 ];
 
 function _urlPath(input: RequestInfo | URL): string {
