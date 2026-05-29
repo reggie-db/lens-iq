@@ -26,9 +26,10 @@ sync:
     # from /api/files/sample_videos/raw?path=<file>, which the AppKit files
     # plugin auto-mounts on the `sample_videos` volume
     # (/Volumes/${var.catalog}/${var.schema}/sample_videos). To refresh the
-    # volume, re-run `scripts/sync-sample-videos.sh` (which calls
-    # `databricks fs cp client/public/sample-videos/*.mp4
-    # dbfs:/Volumes/<catalog>/<schema>/sample_videos/ --overwrite`).
+    # volume, re-run `scripts/sync-sample-videos.sh`, which wraps
+    # `databricks sync client/public/sample-videos
+    # /Volumes/<catalog>/<schema>/sample_videos` (incremental - unchanged
+    # MP4s are not re-uploaded).
     - client/public/sample-videos/*.mp4
     # Booth presenter content (talk track markdown + standalone HTML deck)
     # lives in the `presenter_content` UC volume so we can refresh the

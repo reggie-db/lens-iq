@@ -45,8 +45,11 @@ import { ImageModal } from "../components/ImageModal";
 // keeps fast warm ticks from going too fast.
 const TICK_INTERVAL_MS = 800;
 const TICK_COOLDOWN_MS = 600;
-const RECENT_REFRESH_MS = 5_000;
-const RECENT_LIMIT = 50;
+// Recent-matches list. Loaded eagerly on mount (independent of `isActive`)
+// and grows via infinite scroll: a sentinel at the bottom of the scroll
+// container pages in the next chunk using keyset pagination on
+// (ts, id). Stays bounded only by what the user scrolls through.
+const RECENT_PAGE_SIZE = 50;
 
 type Role = "banned" | "vip" | "staff";
 
@@ -113,7 +116,15 @@ export function FacialRecognitionPage({ isActive }: FacialRecognitionPageProps) 
   const [enrolled, setEnrolled] = useState<EnrolledFace[]>([]);
   const [enrolledLoading, setEnrolledLoading] = useState(false);
   const [recent, setRecent] = useState<MatchRow[]>([]);
+  const [recentLoading, setRecentLoading] = useState(false);
+  const [recentHasMore, setRecentHasMore] = useState(true);
   const [preview, setPreview] = useState<ImagePreview | null>(null);
+
+  // Re-entrancy latch for the infinite-scroll pager. IntersectionObserver
+  // can fire twice in the same tick (scroll inertia + layout settle),
+  // and React state updates aren't atomic enough to gate against that
+  // on their own. The ref is set/cleared synchronously inside loadMore.
+  const recentLoadingLatch = useRef(false);
 
   const openPreview = useCallback((p: ImagePreview) => setPreview(p), []);
   const closePreview = useCallback(() => setPreview(null), []);
@@ -130,39 +141,83 @@ export function FacialRecognitionPage({ isActive }: FacialRecognitionPageProps) 
     }
   }, []);
 
-  const loadRecent = useCallback(async () => {
+  const loadInitialRecent = useCallback(async () => {
+    if (recentLoadingLatch.current) return;
+    recentLoadingLatch.current = true;
+    setRecentLoading(true);
     try {
-      const res = await fetch(`/api/face-matches/recent?limit=${RECENT_LIMIT}`, { cache: "no-store" });
+      const res = await fetch(
+        `/api/face-matches/recent?limit=${RECENT_PAGE_SIZE}`,
+        { cache: "no-store" },
+      );
       if (!res.ok) return;
       const body = (await res.json()) as { rows: MatchRow[] };
       setRecent(body.rows);
+      setRecentHasMore(body.rows.length === RECENT_PAGE_SIZE);
     } catch {
-      // non-fatal; the SSE stream picks up gaps.
+      // non-fatal; the SSE stream picks up new matches as they happen.
+    } finally {
+      recentLoadingLatch.current = false;
+      setRecentLoading(false);
     }
   }, []);
+
+  const loadMoreRecent = useCallback(async () => {
+    if (recentLoadingLatch.current || !recentHasMore || recent.length === 0) return;
+    const tail = recent[recent.length - 1];
+    recentLoadingLatch.current = true;
+    setRecentLoading(true);
+    try {
+      const params = new URLSearchParams({
+        limit: String(RECENT_PAGE_SIZE),
+        before_ts: tail.ts,
+        before_id: String(tail.id),
+      });
+      const res = await fetch(`/api/face-matches/recent?${params}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as { rows: MatchRow[] };
+      // Dedupe against the existing list - a row inserted via SSE between
+      // pages could otherwise appear twice (once at the top from SSE,
+      // once in the older page from the server).
+      setRecent((current) => {
+        const seen = new Set(current.map((r) => r.id));
+        const fresh = body.rows.filter((r) => !seen.has(r.id));
+        return [...current, ...fresh];
+      });
+      setRecentHasMore(body.rows.length === RECENT_PAGE_SIZE);
+    } catch {
+      // non-fatal; the user can try again by scrolling back to the sentinel.
+    } finally {
+      recentLoadingLatch.current = false;
+      setRecentLoading(false);
+    }
+  }, [recent, recentHasMore]);
 
   useEffect(() => {
     if (!isActive) return;
     void loadEnrolled();
   }, [isActive, loadEnrolled]);
 
+  // Recent matches load eagerly on mount, independent of `isActive`,
+  // so the panel is populated even if the webcam never starts or the
+  // user hasn't enrolled anyone yet. The SSE stream below handles
+  // live updates when the page is the active route.
   useEffect(() => {
-    if (!isActive) return;
-    void loadRecent();
-    const id = setInterval(() => void loadRecent(), RECENT_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadRecent]);
+    void loadInitialRecent();
+  }, [loadInitialRecent]);
 
   // Live tail of new match events. The SSE stream pushes any face_matches
   // row inserted server-side; we prepend so the most recent shows up at
   // the top of the recent list (and the toast fires on banned matches).
+  // We deliberately don't cap the list here: the infinite-scroll pager
+  // below may have loaded older rows, and trimming would discard them.
   useEffect(() => {
     if (!isActive) return;
     const es = new EventSource("/api/face-matches/stream");
     es.addEventListener("match", (ev) => {
       try {
         const row = JSON.parse((ev as MessageEvent).data) as MatchRow;
-        setRecent((prev) => [row, ...prev.filter((r) => r.id !== row.id)].slice(0, RECENT_LIMIT));
+        setRecent((prev) => [row, ...prev.filter((r) => r.id !== row.id)]);
         if (row.role === "banned") {
           toast.error(`Banned subject detected: ${row.name}`, { id: `banned-${row.face_id}` });
         }
@@ -196,7 +251,13 @@ export function FacialRecognitionPage({ isActive }: FacialRecognitionPageProps) 
 
         <div className="lg:col-span-2 space-y-6">
           <FaceMatchFeed isActive={isActive} enrolled={enrolled} />
-          <RecentMatchesCard rows={recent} onPreview={openPreview} />
+          <RecentMatchesCard
+            rows={recent}
+            loading={recentLoading}
+            hasMore={recentHasMore}
+            onLoadMore={loadMoreRecent}
+            onPreview={openPreview}
+          />
         </div>
       </div>
 
@@ -697,25 +758,78 @@ function FaceMatchFeed({ isActive, enrolled }: FaceMatchFeedProps) {
 
 interface RecentMatchesCardProps {
   rows: MatchRow[];
+  loading: boolean;
+  hasMore: boolean;
+  onLoadMore: () => void;
   onPreview: (preview: ImagePreview) => void;
 }
 
-function RecentMatchesCard({ rows, onPreview }: RecentMatchesCardProps) {
+function RecentMatchesCard({
+  rows, loading, hasMore, onLoadMore, onPreview,
+}: RecentMatchesCardProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  // Keep the latest onLoadMore in a ref so the IntersectionObserver doesn't
+  // need to rebind every time the callback's identity changes (it changes
+  // whenever `recent` does, which is every SSE push).
+  const onLoadMoreRef = useRef(onLoadMore);
+  useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
+
+  useEffect(() => {
+    if (!hasMore) return;
+    const root = scrollRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) onLoadMoreRef.current();
+      },
+      // rootMargin pre-fetches the next page before the sentinel hits
+      // the actual viewport, so scrolling stays smooth instead of
+      // bumping into a spinner at the bottom.
+      { root, rootMargin: "300px", threshold: 0 },
+    );
+    obs.observe(target);
+    return () => obs.disconnect();
+  }, [hasMore]);
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Recent matches</CardTitle>
       </CardHeader>
       <CardContent>
-        {rows.length === 0 ? (
+        {loading && rows.length === 0 ? (
+          <div className="flex items-center justify-center py-6 text-sm text-slate-500">
+            <Spinner className="w-4 h-4 mr-2" />
+            Loading...
+          </div>
+        ) : rows.length === 0 ? (
           <div className="text-sm text-slate-500">
             No matches recorded yet. Enroll a face above and step in front of the camera.
           </div>
         ) : (
-          <div className="space-y-2 max-h-[460px] overflow-y-auto">
+          <div ref={scrollRef} className="space-y-2 max-h-[460px] overflow-y-auto">
             {rows.map((row) => (
               <RecentMatchRow key={row.id} row={row} onPreview={onPreview} />
             ))}
+            {hasMore ? (
+              <div
+                ref={sentinelRef}
+                className="flex items-center justify-center py-3 text-xs text-slate-400"
+              >
+                {loading ? (
+                  <>
+                    <Spinner className="w-3 h-3 mr-1.5" />
+                    Loading more...
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <div className="py-3 text-center text-xs text-slate-400">
+                End of matches
+              </div>
+            )}
           </div>
         )}
       </CardContent>

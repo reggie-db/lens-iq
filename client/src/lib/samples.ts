@@ -1,14 +1,17 @@
 // Curated catalog of sample input videos for the Live page demo.
 //
-// Two flavors:
-//   - `upstream`: cross-origin MP4 hosted on a CDN (Roboflow `supervision`
-//     reel). server.ts proxies it through to strip CORS for canvas capture.
-//   - `local`: filename that lives both in client/public/sample-videos/ on
-//     disk AND in the `sample_videos` UC volume. server.ts resolves these
-//     in this order: local file (Range-aware fast path for dev), then the
-//     volume via the AppKit files plugin (deployed apps - the bundle
-//     excludes the MP4s from the app source upload to stay under the 10MB
-//     per-file Apps limit, so the SP reads from the volume in prod).
+// Two source flavors are supported, but every catalog entry today is
+// `local` so the booth demo has no external CDN dependency:
+//   - `local` (used by every entry below): filename that lives both in
+//     client/public/sample-videos/ on disk AND in the `sample_videos` UC
+//     volume. server.ts resolves these in this order: local file
+//     (Range-aware fast path for dev), then the volume via the AppKit
+//     files plugin (deployed apps - the bundle excludes the MP4s from
+//     the app source upload to stay under the 10MB per-file Apps limit,
+//     so the SP reads from the volume in prod).
+//   - `upstream` (no entries today, kept on the type for future use):
+//     cross-origin MP4 hosted on a CDN. server.ts proxies it through to
+//     strip CORS for canvas capture.
 //
 // Either way the client only ever hits /api/sample-videos/:id; the server
 // picks the right source. Everything runs as the app SP - no OBO.
@@ -36,49 +39,49 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     id: "vehicles",
     name: "Highway traffic",
     description: "Vehicles moving on a multi-lane highway. Great for license plate + general YOLO detection.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/vehicles.mp4",
+    local: "highway-vehicles.mp4",
     models: ["license_plate", "yolo"],
   },
   {
     id: "vehicles-2",
     name: "Highway traffic (alt angle)",
     description: "Second highway clip, different angle. Same use cases as the primary vehicles clip.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/vehicles-2.mp4",
+    local: "highway-vehicles-alt.mp4",
     models: ["license_plate", "yolo"],
   },
   {
     id: "people-walking",
     name: "Pedestrians",
     description: "Outdoor sidewalk with multiple pedestrians walking. Ideal for people count.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/people-walking.mp4",
+    local: "pedestrians-sidewalk.mp4",
     models: ["people_count", "yolo"],
   },
   {
     id: "subway",
     name: "Subway crowd",
     description: "Dense subway crowd. Stress-tests people count and YOLO person detection.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/subway.mp4",
+    local: "subway-crowd.mp4",
     models: ["people_count", "yolo"],
   },
   {
     id: "market-square",
     name: "Market square",
     description: "Outdoor market scene with foot traffic. Good for people count + general YOLO.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/market-square.mp4",
+    local: "market-square.mp4",
     models: ["people_count", "yolo"],
   },
   {
     id: "grocery-store",
     name: "Grocery store aisle",
     description: "Indoor retail aisle. Closest analog to a QSR/c-store interior - shoppers and products.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/grocery-store.mp4",
+    local: "grocery-store-aisle.mp4",
     models: ["yolo", "people_count"],
   },
   {
     id: "milk-bottling-plant",
     name: "Industrial workers",
     description: "Workers on an industrial line, often with PPE. Good for the hard hat / PPE model.",
-    upstream: "https://media.roboflow.com/supervision/video-examples/milk-bottling-plant.mp4",
+    local: "industrial-ppe-line.mp4",
     models: ["hard_hat", "yolo"],
   },
 

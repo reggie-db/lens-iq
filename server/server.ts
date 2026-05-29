@@ -888,36 +888,54 @@ const AppKit = await createApp({
         );
       }
 
+      // Bootstrap DDL is best-effort: any CREATE that fails (race with a
+      // peer process, table/index already exists under a different owner
+      // in local dev against an SP-owned schema, extension not installable
+      // by this role, etc.) gets swallowed with a warn. If the object
+      // genuinely isn't there, the downstream INSERT/SELECT will surface
+      // a clear "relation does not exist" error of its own.
       async function _runIdempotentDdl(sql: string): Promise<void> {
         try {
           await appkit.lakebase.query(sql);
         } catch (err) {
           if (_isCreateRace(err)) return;
-          throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          const oneLine = sql.replace(/\s+/g, " ").trim().slice(0, 80);
+          console.warn(`bootstrap DDL skipped (${message}): ${oneLine}`);
         }
       }
 
-      // Memoized so concurrent first-callers await the same CREATE SCHEMA
-      // pass rather than all firing CREATE SCHEMA at once. On failure the
-      // promise is cleared so the next caller retries from scratch.
-      let _appSchemaReady: Promise<void> | null = null;
-      const _ensureAppSchema = (): Promise<void> => {
-        if (_appSchemaReady) return _appSchemaReady;
-        const pending = _runIdempotentDdl(`CREATE SCHEMA IF NOT EXISTS ${APP_SCHEMA}`);
-        _appSchemaReady = pending.catch((err) => {
-          _appSchemaReady = null;
-          throw err;
-        });
-        return _appSchemaReady;
-      };
+      // Memoize a one-shot async bootstrap so concurrent first-callers await
+      // the *same* in-flight promise instead of all racing through the same
+      // DDL chain. Without this every per-request `_ensureXTable()` re-runs
+      // the full CREATE TABLE + CREATE INDEX sequence each time two requests
+      // land in the same tick (e.g. one fog observation per camera per
+      // tick), spamming the logs and burning round trips.
+      //
+      // On failure the cached promise is cleared so the next caller retries
+      // from scratch instead of inheriting a poisoned promise.
+      function _once<T>(fn: () => Promise<T>): () => Promise<T> {
+        let pending: Promise<T> | null = null;
+        return () => {
+          if (pending) return pending;
+          const p = fn();
+          pending = p.catch((err) => {
+            pending = null;
+            throw err;
+          }) as Promise<T>;
+          return pending;
+        };
+      }
+
+      const _ensureAppSchema = _once(() =>
+        _runIdempotentDdl(`CREATE SCHEMA IF NOT EXISTS ${APP_SCHEMA}`),
+      );
 
       // Lakebase table backing the Guests page guest-count flush. Same
       // lazy ensure pattern as plate_reads / fog_observations / spill_cycles
       // below so a fresh Lakebase project works without any manual
       // migration.
-      let _guestCountsTableEnsured = false;
-      const _ensureGuestCountsTable = async (): Promise<void> => {
-        if (_guestCountsTableEnsured) return;
+      const _ensureGuestCountsTable = _once(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.guest_counts (
@@ -932,8 +950,7 @@ const AppKit = await createApp({
         await _runIdempotentDdl(
           `CREATE INDEX IF NOT EXISTS idx_guest_counts_ts ON ${APP_SCHEMA}.guest_counts (ts DESC)`,
         );
-        _guestCountsTableEnsured = true;
-      };
+      });
 
       // Guest-count persistence backed by Lakebase Postgres. The Guests page
       // posts batched zone counts here; the time-series chart reads recent
@@ -1078,9 +1095,7 @@ const AppKit = await createApp({
       // ADD COLUMN IF NOT EXISTS rider is so older deployments (which
       // created the table without `plate_image`) pick up the new column
       // automatically on next boot.
-      let _plateReadsTableEnsured = false;
-      const _ensurePlateReadsTable = async (): Promise<void> => {
-        if (_plateReadsTableEnsured) return;
+      const _ensurePlateReadsTable = _once(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.plate_reads (
@@ -1103,8 +1118,7 @@ const AppKit = await createApp({
         await _runIdempotentDdl(
           `CREATE INDEX IF NOT EXISTS idx_plate_reads_ts ON ${APP_SCHEMA}.plate_reads (ts DESC)`,
         );
-        _plateReadsTableEnsured = true;
-      };
+      });
 
       // Persist a plate read from the client (after OCR). Separate from
       // /api/plate-ocr so the client can batch successful reads even if the
@@ -1184,9 +1198,7 @@ const AppKit = await createApp({
       //
       // Table is created lazily on first POST so the demo works on a
       // fresh Lakebase project without any manual migration.
-      let _fogTableEnsured = false;
-      const _ensureFogTable = async () => {
-        if (_fogTableEnsured) return;
+      const _ensureFogTable = _once(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.fog_observations (
@@ -1205,8 +1217,7 @@ const AppKit = await createApp({
         await _runIdempotentDdl(
           `CREATE INDEX IF NOT EXISTS idx_fog_observations_source_ts ON ${APP_SCHEMA}.fog_observations (source_id, ts DESC)`,
         );
-        _fogTableEnsured = true;
-      };
+      });
 
       app.post("/api/fog-observations", async (req, res) => {
         const body = req.body as {
@@ -1342,9 +1353,7 @@ const AppKit = await createApp({
       //
       // Table is created lazily on first POST so the demo works on a fresh
       // Lakebase project without any manual migration.
-      let _spillCyclesTableEnsured = false;
-      const _ensureSpillCyclesTable = async () => {
-        if (_spillCyclesTableEnsured) return;
+      const _ensureSpillCyclesTable = _once(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.spill_cycles (
@@ -1360,8 +1369,7 @@ const AppKit = await createApp({
         await _runIdempotentDdl(
           `CREATE INDEX IF NOT EXISTS idx_spill_cycles_ts ON ${APP_SCHEMA}.spill_cycles (ts DESC)`,
         );
-        _spillCyclesTableEnsured = true;
-      };
+      });
 
       app.post("/api/spill-cycles", async (req, res) => {
         const body = req.body as {
@@ -1484,65 +1492,50 @@ const AppKit = await createApp({
       // Embeddings are stored as `vector(512)` (pgvector). HNSW index
       // on cosine ops so per-tick matches stay constant-time even with
       // a few hundred enrolled faces.
-      //
-      // Race-safe ensure: store the in-flight promise so concurrent callers
-      // await the same DDL pass instead of all firing CREATE EXTENSION /
-      // CREATE TABLE at once and stomping on each other.
-      let _facesTablesReady: Promise<void> | null = null;
-      const _ensureFacesTables = (): Promise<void> => {
-        if (_facesTablesReady) return _facesTablesReady;
-        const pending = (async () => {
-          await _ensureAppSchema();
-          // pgvector ships with Lakebase but is not enabled by default per
-          // database; CREATE EXTENSION IF NOT EXISTS is idempotent and the
-          // app SP has CAN_CONNECT_AND_CREATE so it's allowed to install
-          // extensions on the bound database.
-          await _runIdempotentDdl("CREATE EXTENSION IF NOT EXISTS vector");
-          await _runIdempotentDdl(`
-            CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.faces (
-              id           BIGSERIAL PRIMARY KEY,
-              name         TEXT NOT NULL,
-              role         TEXT NOT NULL CHECK (role IN ('banned', 'vip', 'staff')),
-              image        TEXT,
-              embedding    vector(512) NOT NULL,
-              det_score    REAL,
-              created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-          `);
-          // HNSW cosine index for sub-millisecond matches. The 'vector_cosine_ops'
-          // opclass matches the `<=>` operator we use in /api/face-match.
-          await _runIdempotentDdl(`
-            CREATE INDEX IF NOT EXISTS idx_faces_embedding
-              ON ${APP_SCHEMA}.faces USING hnsw (embedding vector_cosine_ops)
-          `);
-          await _runIdempotentDdl(`
-            CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.face_matches (
-              id          BIGSERIAL PRIMARY KEY,
-              ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-              source_id   TEXT NOT NULL,
-              face_id     BIGINT REFERENCES ${APP_SCHEMA}.faces(id) ON DELETE SET NULL,
-              name        TEXT NOT NULL,
-              role        TEXT NOT NULL,
-              similarity  REAL NOT NULL,
-              bbox_x1     INT NOT NULL,
-              bbox_y1     INT NOT NULL,
-              bbox_x2     INT NOT NULL,
-              bbox_y2     INT NOT NULL,
-              frame_image TEXT
-            )
-          `);
-          await _runIdempotentDdl(
-            `CREATE INDEX IF NOT EXISTS idx_face_matches_ts ON ${APP_SCHEMA}.face_matches (ts DESC)`,
-          );
-        })();
-        // Cache only on success; if the first pass fails the next caller
-        // gets a fresh attempt instead of inheriting a poisoned promise.
-        _facesTablesReady = pending.catch((err) => {
-          _facesTablesReady = null;
-          throw err;
-        });
-        return _facesTablesReady;
-      };
+      const _ensureFacesTables = _once(async () => {
+        await _ensureAppSchema();
+        // pgvector ships with Lakebase but is not enabled by default per
+        // database; CREATE EXTENSION IF NOT EXISTS is idempotent and the
+        // app SP has CAN_CONNECT_AND_CREATE so it's allowed to install
+        // extensions on the bound database.
+        await _runIdempotentDdl("CREATE EXTENSION IF NOT EXISTS vector");
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.faces (
+            id           BIGSERIAL PRIMARY KEY,
+            name         TEXT NOT NULL,
+            role         TEXT NOT NULL CHECK (role IN ('banned', 'vip', 'staff')),
+            image        TEXT,
+            embedding    vector(512) NOT NULL,
+            det_score    REAL,
+            created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+        // HNSW cosine index for sub-millisecond matches. The 'vector_cosine_ops'
+        // opclass matches the `<=>` operator we use in /api/face-match.
+        await _runIdempotentDdl(`
+          CREATE INDEX IF NOT EXISTS idx_faces_embedding
+            ON ${APP_SCHEMA}.faces USING hnsw (embedding vector_cosine_ops)
+        `);
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.face_matches (
+            id          BIGSERIAL PRIMARY KEY,
+            ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_id   TEXT NOT NULL,
+            face_id     BIGINT REFERENCES ${APP_SCHEMA}.faces(id) ON DELETE SET NULL,
+            name        TEXT NOT NULL,
+            role        TEXT NOT NULL,
+            similarity  REAL NOT NULL,
+            bbox_x1     INT NOT NULL,
+            bbox_y1     INT NOT NULL,
+            bbox_x2     INT NOT NULL,
+            bbox_y2     INT NOT NULL,
+            frame_image TEXT
+          )
+        `);
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_face_matches_ts ON ${APP_SCHEMA}.face_matches (ts DESC)`,
+        );
+      });
 
       // Shape of one face returned by lensiq-face-recognition. The PyFunc
       // returns one list per dataframe row; each entry is
@@ -1824,26 +1817,43 @@ const AppKit = await createApp({
         res.json({ faces: out });
       });
 
-      // GET /api/face-matches/recent?limit=50
+      // GET /api/face-matches/recent?limit=50[&before_ts=<iso>&before_id=<n>]
+      //
+      // Keyset pagination on (ts DESC, id DESC). Pass the last row's `ts` and
+      // `id` from a previous page in `before_ts` / `before_id` to fetch the
+      // next older page. Without those params, returns the most recent
+      // `limit` rows. The composite tuple comparison `(ts, id) < ($ts, $id)`
+      // is stable across timestamp ties because BIGSERIAL `id` is unique.
       app.get("/api/face-matches/recent", async (req, res) => {
         const limitRaw = Number(req.query.limit ?? 50);
         const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
+        const beforeTs = typeof req.query.before_ts === "string" ? req.query.before_ts : null;
+        const beforeIdRaw = req.query.before_id;
+        const beforeId =
+          typeof beforeIdRaw === "string" && beforeIdRaw.length > 0 && Number.isFinite(Number(beforeIdRaw))
+            ? Math.floor(Number(beforeIdRaw))
+            : null;
+        const useCursor = beforeTs !== null && beforeId !== null;
         try {
           await _ensureFacesTables();
+          const baseSelect = `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
+                    m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
+                    f.image AS enrolled_image
+             FROM ${APP_SCHEMA}.face_matches m
+             LEFT JOIN ${APP_SCHEMA}.faces f ON f.id = m.face_id`;
+          const sql = useCursor
+            ? `${baseSelect}
+               WHERE (m.ts, m.id) < ($2::timestamptz, $3)
+               ORDER BY m.ts DESC, m.id DESC LIMIT $1`
+            : `${baseSelect}
+               ORDER BY m.ts DESC, m.id DESC LIMIT $1`;
+          const params: Array<string | number> = useCursor ? [limit, beforeTs, beforeId] : [limit];
           const r = await appkit.lakebase.query<{
             id: number; ts: string; source_id: string; face_id: number | null;
             name: string; role: string; similarity: number;
             bbox_x1: number; bbox_y1: number; bbox_x2: number; bbox_y2: number;
             frame_image: string | null; enrolled_image: string | null;
-          }>(
-            `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
-                    m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
-                    f.image AS enrolled_image
-             FROM ${APP_SCHEMA}.face_matches m
-             LEFT JOIN ${APP_SCHEMA}.faces f ON f.id = m.face_id
-             ORDER BY m.ts DESC LIMIT $1`,
-            [limit],
-          );
+          }>(sql, params);
           res.json({ rows: r.rows });
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
