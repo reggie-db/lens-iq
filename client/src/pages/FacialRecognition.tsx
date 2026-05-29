@@ -8,6 +8,7 @@ import {
 import { Loader2, ShieldAlert, Star, Trash2, UserCheck, UserPlus, X } from "lucide-react";
 import { captureVideoFrame, captureVideoFrameForDetection, resizeDataUrl } from "../lib/camera";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { formatRelative } from "../lib/format";
 import { useWebcamStream } from "../lib/useWebcamStream";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
 import { EndpointNotDeployedError, fetchJson } from "../lib/serving-status";
@@ -851,7 +852,7 @@ function RecentMatchRow({ row, onPreview }: RecentMatchRowProps) {
     ? "rgba(220, 38, 38, 0.08)"
     : "rgb(248 250 252)";
 
-  const sharedCaption = `${row.name} · ${meta.label} · ${(row.similarity * 100).toFixed(0)}% match · ${_formatRelative(row.ts)}`;
+  const sharedCaption = `${row.name} · ${meta.label} · ${(row.similarity * 100).toFixed(0)}% match · ${formatRelative(row.ts)}`;
 
   return (
     <div
@@ -898,7 +899,7 @@ function RecentMatchRow({ row, onPreview }: RecentMatchRowProps) {
         </div>
       </div>
       <span className="text-xs text-slate-500 tabular-nums shrink-0 self-center">
-        {_formatRelative(row.ts)}
+        {formatRelative(row.ts)}
       </span>
     </div>
   );
@@ -992,14 +993,6 @@ function useStableFaceBadge(faceCount: number, matchedCount: number): StableFace
   return state;
 }
 
-function _formatRelative(iso: string): string {
-  const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "";
-  const delta = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (delta < 60) return `${delta}s ago`;
-  if (delta < 3600) return `${Math.floor(delta / 60)}m ago`;
-  return new Date(ts).toLocaleTimeString();
-}
 
 // captureVideoFrame is re-exported so a future "save a clearer reference
 // photo from the webcam" button can pull a high-res grab without going

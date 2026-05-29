@@ -71,20 +71,6 @@ declare module "@databricks/appkit" {
       };
       chunk: unknown;
     };
-    spill: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    wet_floor_sign: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
     cigarette_vape: {
       request: Record<string, unknown>;
       response: {
@@ -178,20 +164,6 @@ declare module "@databricks/appkit-ui/react" {
       chunk: unknown;
     };
     license_plate: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    spill: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    wet_floor_sign: {
       request: Record<string, unknown>;
       response: {
         predictions?: Record<string, unknown>[];

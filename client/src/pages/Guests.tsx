@@ -11,7 +11,10 @@ import {
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { formatBucketLabel } from "../lib/format";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { useBatchFlush } from "../lib/useBatchFlush";
+import { usePollingEffect } from "../lib/usePollingEffect";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // Guest count view.
@@ -132,7 +135,11 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
     [],
   );
 
-  const pendingRef = useRef<PendingCount[]>([]);
+  const pendingRef = useBatchFlush<PendingCount>({
+    isActive,
+    endpoint: "/api/guest-counts",
+    intervalMs: POST_INTERVAL_MS,
+  });
 
   // Each feed reports per-tick. We update instantaneous current counts and
   // bump cumulative by the number of new tracks seen. We also queue an
@@ -155,26 +162,6 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
     [],
   );
 
-  useEffect(() => {
-    if (!isActive) return;
-    const flush = async () => {
-      const batch = pendingRef.current.splice(0, pendingRef.current.length);
-      if (batch.length === 0) return;
-      try {
-        const res = await fetch("/api/guest-counts", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch }),
-        });
-        if (!res.ok) pendingRef.current.unshift(...batch);
-      } catch {
-        pendingRef.current.unshift(...batch);
-      }
-    };
-    const id = setInterval(flush, POST_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [isActive]);
-
   const loadChart = useCallback(async () => {
     try {
       const res = await fetch(
@@ -188,7 +175,7 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
         const key = String(ts);
         const existing = grouped.get(key) ?? {
           ts,
-          label: _formatBucketLabel(ts),
+          label: formatBucketLabel(ts),
           [METRIC_PUMP_USERS]: null,
           [METRIC_PUMP_CARS]: null,
           [METRIC_IN_STORE]: null,
@@ -205,12 +192,7 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!isActive) return;
-    void loadChart();
-    const id = setInterval(() => void loadChart(), CHART_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadChart]);
+  usePollingEffect(loadChart, { isActive, intervalMs: CHART_REFRESH_MS });
 
   // Total guests = humans only. Cars are tracked separately - cars-as-guests
   // would double-count people who are also visible at the pump.
@@ -542,7 +524,3 @@ function GuestFeed({
   );
 }
 
-function _formatBucketLabel(ts: number): string {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-}

@@ -19,6 +19,7 @@ import { SAMPLE_VIDEOS, defaultSampleForModel, getSampleVideo } from "../lib/sam
 import { useWebcamStream } from "../lib/useWebcamStream";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
+import { usePollingEffect } from "../lib/usePollingEffect";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 
 // Sources the user can feed into the detector. "webcam" is the default; the
@@ -148,12 +149,7 @@ export function LivePage({ isActive }: LivePageProps) {
     [activeModel.servingAlias],
   );
 
-  useEffect(() => {
-    if (!isActive) return;
-    void refreshServingStatus();
-    const id = setInterval(() => void refreshServingStatus(), SERVING_STATUS_POLL_MS);
-    return () => clearInterval(id);
-  }, [isActive, refreshServingStatus]);
+  usePollingEffect(refreshServingStatus, { isActive, intervalMs: SERVING_STATUS_POLL_MS });
 
   // If a detect request has been in flight long enough to look like a cold
   // start, force-refresh the cached serving-status so the overlay can switch

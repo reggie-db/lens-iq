@@ -28,10 +28,8 @@ env:
     valueFrom: detector
   - name: DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE
     valueFrom: license_plate
-  - name: DATABRICKS_SERVING_ENDPOINT_SPILL
-    valueFrom: spill
-  - name: DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN
-    valueFrom: wet_floor_sign
+  # Spill + wet_floor_sign reuse the `llm` endpoint (see
+  # server/vision-detector.ts); no dedicated env vars needed.
   - name: DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE
     valueFrom: cigarette_vape
   - name: DATABRICKS_SERVING_ENDPOINT_SLIP_FALL

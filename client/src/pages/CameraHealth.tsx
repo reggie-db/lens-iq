@@ -11,8 +11,11 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
+import { formatBucketLabel, formatRelative } from "../lib/format";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { useBatchFlush } from "../lib/useBatchFlush";
+import { usePollingEffect } from "../lib/usePollingEffect";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // Camera Clarity view.
@@ -134,7 +137,11 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
     [],
   );
 
-  const pendingRef = useRef<PendingObservation[]>([]);
+  const pendingRef = useBatchFlush<PendingObservation>({
+    isActive,
+    endpoint: "/api/fog-observations",
+    intervalMs: POST_INTERVAL_MS,
+  });
 
   const updateFeedState = useCallback(
     (
@@ -176,28 +183,6 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
     setSecondaryState(EMPTY_FEED_STATE);
   }, [secondarySource]);
 
-  // Batch-flush per-tick observations to Lakebase. Same retry-on-fail
-  // pattern as guest_counts so a transient 5xx doesn't lose the events.
-  useEffect(() => {
-    if (!isActive) return;
-    const flush = async () => {
-      const batch = pendingRef.current.splice(0, pendingRef.current.length);
-      if (batch.length === 0) return;
-      try {
-        const res = await fetch("/api/fog-observations", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch }),
-        });
-        if (!res.ok) pendingRef.current.unshift(...batch);
-      } catch {
-        pendingRef.current.unshift(...batch);
-      }
-    };
-    const id = setInterval(flush, POST_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [isActive]);
-
   const loadChart = useCallback(async () => {
     try {
       const res = await fetch(
@@ -213,7 +198,7 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
         const key = String(ts);
         const existing = grouped.get(key) ?? {
           ts,
-          label: _formatBucketLabel(ts),
+          label: formatBucketLabel(ts),
           primary: null,
           secondary: null,
         };
@@ -239,19 +224,8 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!isActive) return;
-    void loadChart();
-    const id = setInterval(() => void loadChart(), CHART_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadChart]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    void loadIncidents();
-    const id = setInterval(() => void loadIncidents(), INCIDENTS_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadIncidents]);
+  usePollingEffect(loadChart, { isActive, intervalMs: CHART_REFRESH_MS });
+  usePollingEffect(loadIncidents, { isActive, intervalMs: INCIDENTS_REFRESH_MS });
 
   const camerasFoggedNow = (primaryState.fogged ? 1 : 0) + (secondaryState.fogged ? 1 : 0);
   const totalIncidents = primaryState.incidentsOpened + secondaryState.incidentsOpened;
@@ -413,7 +387,7 @@ export function CameraHealthPage({ isActive }: CameraHealthPageProps) {
                       </div>
                     </div>
                     <span className="text-xs text-slate-500 tabular-nums shrink-0 mt-0.5">
-                      {_formatRelative(r.ts)}
+                      {formatRelative(r.ts)}
                     </span>
                   </div>
                 ))
@@ -631,16 +605,3 @@ function FogFeed({ isActive, config, candidates, state, onSourceChange, onSample
   );
 }
 
-function _formatBucketLabel(ts: number): string {
-  const d = new Date(ts);
-  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
-}
-
-function _formatRelative(iso: string): string {
-  const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "";
-  const deltaSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (deltaSec < 60) return `${deltaSec}s ago`;
-  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
-  return new Date(ts).toLocaleTimeString();
-}

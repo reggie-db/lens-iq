@@ -84,12 +84,11 @@ variables:
   license_plate_endpoint:
     description: License-plate endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-license-plate
-  spill_endpoint:
-    description: Spill endpoint (Roboflow Inference SDK loaded on cold start).
-    default: lensiq-spill
-  wet_floor_sign_endpoint:
-    description: Wet-floor-sign endpoint (Roboflow Inference SDK loaded on cold start).
-    default: lensiq-wet-floor-sign
+  # Spill + wet-floor-sign do NOT have dedicated endpoints. Both run
+  # through the `llm_endpoint` foundation model via
+  # server/vision-detector.ts (one Claude call per frame covers both
+  # classes; the per-frame image-hash cache serves the second
+  # /api/detect call for free).
   cigarette_vape_endpoint:
     description: Cigarette/vape endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-cigarette-vape
@@ -194,64 +193,16 @@ resources:
               roboflow_version: "5"
               api_key_scope: ${var.roboflow_secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
-        # Threshold rationale (per-detector calibration tables, FP analysis,
-        # demo-clip probing) lives in docs/detector-calibration.md.
-        - task_key: deploy_spill
-          notebook_task:
-            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
-              model_slug: spill
-              model_display_name: Spills
-              # Switched from universe/spills-ax5xv/2 (which mostly emitted
-              # shelf-wall FPs and never tagged the actual wet patch on the
-              # canonical aisle clip) to iiy/spills/1. Per side-by-side
-              # probing in docs/detector-calibration.md, this is the only
-              # candidate that consistently fires on the floor area at
-              # y_center=77-96% where real spills live. Its confidences
-              # are saturated at 1.0 (single-class model), so we rely on
-              # area + y_center filters to gate out the bottom-edge
-              # slivers and back-wall FPs.
-              roboflow_workspace: iiy
-              roboflow_project: spills
-              roboflow_version: "1"
-              api_key_scope: ${var.roboflow_secret_scope}
-              api_key_secret: ${var.roboflow_secret_key}
-              class_label_override: spill
-              # Saturated-confidence model -> floor at 0.5 just gates out
-              # NMS-droppable noise (anything the SDK would already cut at
-              # default conf). The geometric filters are doing the work.
-              min_confidence: "0.50"
-              # Drop micro-slivers and frame-edge specks; keep small floor
-              # patches (the actual spill is ~0.1-1% of the frame).
-              min_area_pct: "0.05"
-              # Reject the model's recurring "back wall / shelf" FPs which
-              # span 20-30% of the frame.
-              max_area_pct: "3.0"
-              # Real spills are floor-level (y_center 70-95%). Cuts ceiling
-              # / mid-shelf hallucinations.
-              min_y_center_pct: "70.0"
-              # Bottom-edge sliver FPs land at y>=96%. Cap below that.
-              max_y_center_pct: "95.0"
-        - task_key: deploy_wet_floor_sign
-          notebook_task:
-            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
-              model_slug: wet_floor_sign
-              model_display_name: Wet floor sign
-              roboflow_workspace: frc-5881
-              roboflow_project: wet-floor-nhjwl
-              roboflow_version: "1"
-              api_key_scope: ${var.roboflow_secret_scope}
-              api_key_secret: ${var.roboflow_secret_key}
-              class_label_override: wet_floor_sign
-              min_confidence: "0.50"
-              min_area_pct: "0.3"
-              max_area_pct: "8.0"
-              min_y_center_pct: "40.0"
+        # Spill + wet-floor-sign tasks intentionally removed. Both
+        # detectors now run through Claude vision on the shared
+        # `llm_endpoint` (see server/vision-detector.ts), so there is
+        # no Roboflow PyFunc to deploy here. If a workspace still has
+        # the old `lensiq-spill` / `lensiq-wet-floor-sign` endpoints
+        # from a previous deploy, delete them manually with:
+        #   databricks serving-endpoints delete lensiq-spill
+        #   databricks serving-endpoints delete lensiq-wet-floor-sign
+        # Threshold rationale for the remaining Roboflow detectors
+        # lives in docs/detector-calibration.md.
         - task_key: deploy_cigarette_vape
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb

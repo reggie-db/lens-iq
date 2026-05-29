@@ -8,6 +8,9 @@ import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts"
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
 import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
+import { detectWithClaude, type VisionDetection } from "./vision-detector.ts";
+import { decodeImage, toBase64Body, toDataUrl } from "./image-data-url.ts";
+import { extractChatText, extractJsonObject } from "./llm-response.ts";
 import {
   asyncRoute,
   buildBatchInsert,
@@ -218,61 +221,7 @@ function _normalizeDatabricks(raw: unknown): NormalizedDetection[] {
   return out;
 }
 
-// Strip the `data:image/...;base64,` prefix that the browser canvas produces,
-// returning just the base64 payload Model Serving expects.
-function _stripDataUrl(image: string): string {
-  const match = image.match(/^data:[^;]+;base64,(.+)$/);
-  return match ? match[1] : image;
-}
 
-// Decode a base64 image (with or without a data URL prefix) into a Buffer for
-// upload to the UC volume.
-function _decodeImage(image: string): Buffer | null {
-  try {
-    return Buffer.from(_stripDataUrl(image), "base64");
-  } catch {
-    return null;
-  }
-}
-
-// Pull the assistant text out of a Databricks chat-completions response. The
-// llm endpoint returns OpenAI-shaped JSON: choices[0].message.content can be
-// either a plain string or an array of content blocks (`type: "text"`). The
-// vision-image variant returns the text block in the array form.
-// Pulls the first {...} JSON object out of an LLM text response. Claude
-// sometimes wraps the answer in ```json fences or prepends an "Output:"
-// label even when the prompt says "no prose". Falling back to the
-// substring between the first '{' and last '}' is more forgiving than
-// JSON.parse on the raw string.
-function _extractJsonObject(raw: string): string {
-  if (!raw) return raw;
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start >= 0 && end > start) return raw.slice(start, end + 1);
-  return raw;
-}
-
-function _extractChatText(payload: unknown): string {
-  if (!payload || typeof payload !== "object") return "";
-  const choices = (payload as Record<string, unknown>).choices;
-  if (!Array.isArray(choices) || choices.length === 0) return "";
-  const choice = choices[0] as Record<string, unknown>;
-  const message = choice.message as Record<string, unknown> | undefined;
-  if (!message) return "";
-  const content = message.content;
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    const parts: string[] = [];
-    for (const block of content) {
-      if (block && typeof block === "object" && (block as { type?: string }).type === "text") {
-        const t = (block as { text?: string }).text;
-        if (typeof t === "string") parts.push(t);
-      }
-    }
-    return parts.join(" ");
-  }
-  return "";
-}
 
 // Stream a local sample MP4 from client/public/sample-videos/<filename>. The
 // path is constrained to LOCAL_SAMPLE_VIDEO_DIR (no traversal). HTTP Range
@@ -516,14 +465,16 @@ const AppKit = await createApp({
     analytics({}),
     serving({
       endpoints: {
+        // llm doubles as the vision backend for spill + wet_floor_sign
+        // (see server/vision-detector.ts). Those two detectors no
+        // longer have their own Roboflow endpoint binding because the
+        // foundation model handles both with one call per frame.
         llm: { env: "DATABRICKS_SERVING_ENDPOINT_LLM" },
-        // One endpoint per detector use case. Aliases must match the
-        // `servingAlias` values in client/src/lib/models.ts so the
-        // /api/detect handler can look up the right endpoint by model id.
+        // One endpoint per remaining detector use case. Aliases must
+        // match the `servingAlias` values in client/src/lib/models.ts
+        // so /api/detect can look up the right endpoint by model id.
         detector: { env: "DATABRICKS_SERVING_ENDPOINT_DETECTOR" },
         license_plate: { env: "DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE" },
-        spill: { env: "DATABRICKS_SERVING_ENDPOINT_SPILL" },
-        wet_floor_sign: { env: "DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN" },
         cigarette_vape: { env: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE" },
         slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
         fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
@@ -723,6 +674,33 @@ const AppKit = await createApp({
         model: z.string().default(DEFAULT_MODEL_ID),
       });
 
+      // Models that resolve via the generic Claude vision detector instead
+      // of a per-model Roboflow PyFunc. Models that share an identical
+      // `labels` set share ONE Claude call per frame via the image-hash
+      // cache, so listing both `spill` and `wet_floor_sign` with the same
+      // label pair means the Spills page's parallel calls cost a single
+      // round-trip. `match` is the Claude label whose hits this model
+      // surfaces. `promptAddendum` lets us inject scene-specific guidance
+      // without forking the detector.
+      interface VisionGroup {
+        labels: readonly string[];
+        match: string;
+        promptAddendum?: string;
+      }
+      const VISION_GROUPS: Record<string, VisionGroup> = {
+        spill: { labels: ["spill", "cone"], match: "spill" },
+        wet_floor_sign: { labels: ["spill", "cone"], match: "cone" },
+      };
+
+      function _toNormalizedDetections(hits: VisionDetection[], modelId: string): NormalizedDetection[] {
+        return hits.map((h) => ({
+          label: modelId,
+          class_id: -1,
+          confidence: h.confidence,
+          bbox: h.bbox,
+        }));
+      }
+
       app.post("/api/detect", asyncRoute({ body: DetectBody }, async ({ body }) => {
         const model = getModel(body.model);
         if (!model) throw new HttpError(400, `Unknown model id: ${body.model}`);
@@ -732,12 +710,28 @@ const AppKit = await createApp({
         // dispatch column - the alias alone routes to the right endpoint.
         // `iou` is YOLO-only but the Roboflow + fog PyFuncs ignore unknown
         // row columns, so it's safe to send unconditionally.
+        //
+        // Models registered in VISION_GROUPS resolve via the generic
+        // Claude vision detector. The NormalizedDetection contract on the
+        // way out is unchanged so persist + overlay code stays the same.
         let detections: NormalizedDetection[] = [];
         try {
-          const data = await invokeServing(appkit, model.servingAlias, {
-            dataframe_records: [{ image: body.image, conf: body.conf, iou: body.iou }],
-          });
-          detections = _normalizeDatabricks(data);
+          const visionGroup = VISION_GROUPS[model.id];
+          if (visionGroup) {
+            const allHits = await detectWithClaude(appkit, body.image, {
+              labels: visionGroup.labels,
+              promptAddendum: visionGroup.promptAddendum,
+            });
+            const matched = allHits.filter(
+              (h) => h.label === visionGroup.match && h.confidence >= body.conf,
+            );
+            detections = _toNormalizedDetections(matched, model.id);
+          } else {
+            const data = await invokeServing(appkit, model.servingAlias, {
+              dataframe_records: [{ image: body.image, conf: body.conf, iou: body.iou }],
+            });
+            detections = _normalizeDatabricks(data);
+          }
         } catch (err) {
           // EndpointNotDeployedError is handled by the global error
           // middleware (-> 503 envelope the UI branches on). Everything
@@ -750,7 +744,7 @@ const AppKit = await createApp({
         let saved: { frame_id: string; url: string } | null = null;
         if (body.persist) {
           try {
-            const buffer = _decodeImage(body.image);
+            const buffer = decodeImage(body.image);
             if (!buffer) throw new Error("Could not decode base64 image.");
             const frameId = `frame_${Date.now()}`;
             const fileName = `${frameId}.jpg`;
@@ -974,9 +968,8 @@ const AppKit = await createApp({
       // client falls back to the full OCR crop with no apology.
       const PlateOcrBody = z.object({ image: z.string().min(1) });
       app.post("/api/plate-ocr", asyncRoute({ body: PlateOcrBody }, async ({ body }) => {
-        const dataUrl = body.image.startsWith("data:")
-          ? body.image
-          : `data:image/jpeg;base64,${body.image}`;
+        const dataUrl = toDataUrl(body.image);
+        if (!dataUrl) throw new HttpError(400, "Invalid image payload (expected JPEG/PNG/WEBP base64 or data URL).");
         const prompt = [
           "You are a license plate OCR helper looking at a still image from a security camera.",
           "Two outputs are required: the alphanumeric plate text AND a tight rectangle around the plate. Both fields are mandatory whenever a plate is visible.",
@@ -1009,8 +1002,8 @@ const AppKit = await createApp({
           // despite the prompt, and occasionally prepends a stray newline
           // or `Output:`. Strip those before JSON.parse so the bbox
           // survives the round trip.
-          const raw = _extractChatText(data).trim();
-          const jsonText = _extractJsonObject(raw);
+          const raw = extractChatText(data).trim();
+          const jsonText = extractJsonObject(raw);
           let plateText: string | null = null;
           let plateBbox: [number, number, number, number] | null = null;
           try {
@@ -1332,6 +1325,12 @@ const AppKit = await createApp({
         await _ensureSpillCyclesTable();
         // Avg / min / fastest over the last 50 cycles so a single demo run
         // doesn't get drowned out by a backlog of slow historical cycles.
+        // The MIN filter (>= 1000ms) drops cycles that finished
+        // unrealistically fast - those are almost always the result of
+        // the spill+cone landing in the SAME detection tick (the cycle
+        // gets stamped with delta=0) or a stale persisted cycle from a
+        // looped clip, neither of which should be advertised as the
+        // operator's "fastest response" on the summary card.
         const r = await appkit.lakebase.query<SpillSummaryRow>(
           `WITH recent AS (
              SELECT response_ms, ts
@@ -1342,7 +1341,7 @@ const AppKit = await createApp({
            SELECT
              COUNT(*)::int                                            AS cycles,
              ROUND(AVG(response_ms))::int                             AS avg_response_ms,
-             MIN(response_ms)::int                                    AS min_response_ms,
+             MIN(response_ms) FILTER (WHERE response_ms >= 1000)::int AS min_response_ms,
              (SELECT response_ms FROM recent ORDER BY ts DESC LIMIT 1) AS last_response_ms,
              (SELECT ts FROM recent ORDER BY ts DESC LIMIT 1)          AS last_ts
            FROM recent`,

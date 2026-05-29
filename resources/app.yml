@@ -32,14 +32,9 @@ resources:
           serving_endpoint:
             name: ${var.license_plate_endpoint}
             permission: CAN_QUERY
-        - name: spill
-          serving_endpoint:
-            name: ${var.spill_endpoint}
-            permission: CAN_QUERY
-        - name: wet_floor_sign
-          serving_endpoint:
-            name: ${var.wet_floor_sign_endpoint}
-            permission: CAN_QUERY
+        # spill + wet_floor_sign are served by Claude on the shared
+        # `llm` endpoint above (see server/vision-detector.ts), so no
+        # dedicated resource binding is needed for either one.
         - name: cigarette_vape
           serving_endpoint:
             name: ${var.cigarette_vape_endpoint}

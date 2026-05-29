@@ -1,18 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Badge, Card, CardContent, CardDescription, CardHeader, CardTitle,
+  Card, CardContent, CardDescription, CardHeader, CardTitle,
   Label, Select, SelectContent, SelectGroup, SelectItem, SelectLabel,
-  SelectTrigger, SelectValue,
+  SelectTrigger, SelectValue, Slider,
 } from "@databricks/appkit-ui/react";
-import { AlertTriangle, Cone, Droplets, Loader2 } from "lucide-react";
+import { AlertTriangle, Cone, Loader2 } from "lucide-react";
 import {
   captureVideoFrameForDetection,
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
+import { formatMs, formatRelative } from "../lib/format";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
+import { usePollingEffect } from "../lib/usePollingEffect";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // Spill response view.
@@ -46,17 +48,18 @@ const RECENT_LIMIT = 25;
 
 // Per-detector confidence thresholds passed to /api/detect.
 //
-// Spill: backing model spills-ax5xv/2 emits the REAL spill on the canonical
-// aisle clip at conf 0.05-0.09 (see databricks.yml -> deploy_spill comments).
-// callDetector defaults to conf=0.35 which the inference SDK uses to gate
-// its own NMS pass BEFORE the served PyFunc's post-filter ever sees the
-// predictions, so anything below 0.35 would get silently dropped upstream.
-// We send 0.03 here so the SDK forwards everything 3%+; the PyFunc then
-// enforces its own min_confidence=0.04 floor plus the geometric filters
-// (area, y_center) that reject the model's known FPs. Cone fires at
-// 0.83-0.87 so the default 0.35 is plenty for wet_floor_sign.
-const CONF_SPILL = 0.03;
-const CONF_CONE = 0.35;
+// Both spill and wet-floor-sign are now backed by a single Claude
+// vision call on Databricks (see server/vision-detector.ts). The
+// underlying model returns properly calibrated 0-1 confidences, so
+// 0.30 for spills (the wet patch is genuinely subtle) and 0.85 for
+// cones (Claude is very confident on real CAUTION cones and that
+// floor reliably filters shelf/sign false positives) are sensible
+// defaults. The threshold sliders in the SpillFeed card override
+// these at runtime so an operator can tune for their own footage.
+// The two /api/detect calls per tick trigger one Claude round-trip
+// per frame because the second call hits the image-hash cache.
+const DEFAULT_CONF_SPILL = 0.3;
+const DEFAULT_CONF_CONE = 0.85;
 
 const COLOR_SPILL = "#eab308";
 const COLOR_CONE = "#f97316";
@@ -144,19 +147,8 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
     }
   }, []);
 
-  useEffect(() => {
-    if (!isActive) return;
-    void loadSummary();
-    const id = setInterval(() => void loadSummary(), SUMMARY_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadSummary]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    void loadRecent();
-    const id = setInterval(() => void loadRecent(), RECENT_REFRESH_MS);
-    return () => clearInterval(id);
-  }, [isActive, loadRecent]);
+  usePollingEffect(loadSummary, { isActive, intervalMs: SUMMARY_REFRESH_MS });
+  usePollingEffect(loadRecent, { isActive, intervalMs: RECENT_REFRESH_MS });
 
   const handleCycleComplete = useCallback(() => {
     // Fire-and-forget refresh so the summary cards and recent list reflect
@@ -177,9 +169,9 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
                 style={{ color: cycle.responseMs != null ? COLOR_CONE : cycle.spillFirstTs != null ? COLOR_SPILL : "#0f172a" }}
               >
                 {cycle.responseMs != null
-                  ? _formatMs(cycle.responseMs)
+                  ? formatMs(cycle.responseMs)
                   : cycle.spillFirstTs != null
-                  ? _formatMs(cycle.liveElapsedMs)
+                  ? formatMs(cycle.liveElapsedMs)
                   : "-"}
               </span>
               <span className="text-xs text-slate-500">
@@ -197,7 +189,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
             <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Last cycle</div>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-semibold tabular-nums text-slate-900">
-                {summary.last_response_ms != null ? _formatMs(summary.last_response_ms) : "-"}
+                {summary.last_response_ms != null ? formatMs(summary.last_response_ms) : "-"}
               </span>
               <span className="text-xs text-slate-500">most recent</span>
             </div>
@@ -208,7 +200,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
             <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Avg response</div>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_NEUTRAL }}>
-                {summary.avg_response_ms != null ? _formatMs(summary.avg_response_ms) : "-"}
+                {summary.avg_response_ms != null ? formatMs(summary.avg_response_ms) : "-"}
               </span>
               <span className="text-xs text-slate-500">last {summary.cycles} cycle{summary.cycles === 1 ? "" : "s"}</span>
             </div>
@@ -219,7 +211,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
             <div className="text-xs uppercase tracking-wider text-slate-500 mb-0.5">Fastest response</div>
             <div className="flex items-baseline gap-2">
               <span className="text-3xl font-semibold tabular-nums" style={{ color: COLOR_CONE }}>
-                {summary.min_response_ms != null ? _formatMs(summary.min_response_ms) : "-"}
+                {summary.min_response_ms != null ? formatMs(summary.min_response_ms) : "-"}
               </span>
               <span className="text-xs text-slate-500">best so far</span>
             </div>
@@ -257,7 +249,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
                       <Cone className="w-4 h-4 shrink-0" style={{ color: COLOR_CONE }} />
                       <div className="min-w-0">
                         <div className="font-mono text-sm font-semibold text-slate-900 tabular-nums">
-                          {_formatMs(r.response_ms)}
+                          {formatMs(r.response_ms)}
                         </div>
                         <div className="text-xs text-slate-500 truncate">
                           {r.was_assisted ? "operator-assisted" : "auto-detected"}
@@ -265,7 +257,7 @@ export function SpillsPage({ isActive }: SpillsPageProps) {
                       </div>
                     </div>
                     <span className="text-xs text-slate-500 tabular-nums shrink-0">
-                      {_formatRelative(r.ts)}
+                      {formatRelative(r.ts)}
                     </span>
                   </div>
                 ))
@@ -314,6 +306,16 @@ function SpillFeed({
   // hiccup doesn't blank the "playing" indicator and vice versa.
   const [detectorStatus, setDetectorStatus] = useState<string>("");
   const [detectorError, setDetectorError] = useState<string | null>(null);
+  // Live thresholds for the spill and cone calls. Slider-controlled
+  // below so an operator can tune sensitivity without redeploying.
+  // Read via refs inside the tick so changing a slider doesn't rebuild
+  // the tick callback and reset the useDetectionLoop interval.
+  const [spillConf, setSpillConf] = useState(DEFAULT_CONF_SPILL);
+  const [coneConf, setConeConf] = useState(DEFAULT_CONF_CONE);
+  const spillConfRef = useRef(spillConf);
+  const coneConfRef = useRef(coneConf);
+  useEffect(() => { spillConfRef.current = spillConf; }, [spillConf]);
+  useEffect(() => { coneConfRef.current = coneConf; }, [coneConf]);
 
   const sample = useMemo(() => getSampleVideo(sourceId) ?? null, [sourceId]);
   const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
@@ -377,8 +379,8 @@ function SpillFeed({
     if (!frame) return;
     try {
       const [spillResult, coneResult] = await Promise.all([
-        callDetector(frame.image, { model: "spill", conf: CONF_SPILL }).catch(() => ({ detections: [], saved: null })),
-        callDetector(frame.image, { model: "wet_floor_sign", conf: CONF_CONE }).catch(() => ({ detections: [], saved: null })),
+        callDetector(frame.image, { model: "spill", conf: spillConfRef.current }).catch(() => ({ detections: [], saved: null })),
+        callDetector(frame.image, { model: "wet_floor_sign", conf: coneConfRef.current }).catch(() => ({ detections: [], saved: null })),
       ]);
       const spillBoxes: OverlayDetection[] = spillResult.detections.map((d) => ({
         ...d,
@@ -430,7 +432,7 @@ function SpillFeed({
 
       const parts: string[] = [];
       if (spillBoxes.length > 0) parts.push(`${spillBoxes.length} spill`);
-      if (coneBoxes.length > 0) parts.push(`${coneBoxes.length} cone`);
+      if (coneBoxes.length > 0) parts.push(`${coneBoxes.length} signage`);
       setDetectorStatus(parts.length > 0 ? `Detected ${parts.join(" + ")}` : "Watching for spills...");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -453,7 +455,7 @@ function SpillFeed({
           color: isSpill ? COLOR_SPILL : COLOR_CONE,
           label: isSpill
             ? `SPILL ${(d.confidence * 100).toFixed(0)}%`
-            : `CONE ${(d.confidence * 100).toFixed(0)}%`,
+            : `SIGNAGE ${(d.confidence * 100).toFixed(0)}%`,
           fillAlpha: 0.18,
           labelAlpha: 1,
         };
@@ -485,6 +487,23 @@ function SpillFeed({
           </Select>
         </div>
 
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <ThresholdSlider
+            id="spill-threshold"
+            label="Spill threshold"
+            color={COLOR_SPILL}
+            value={spillConf}
+            onChange={setSpillConf}
+          />
+          <ThresholdSlider
+            id="cone-threshold"
+            label="Signage threshold"
+            color={COLOR_CONE}
+            value={coneConf}
+            onChange={setConeConf}
+          />
+        </div>
+
         <div
           className="relative bg-black rounded-lg overflow-hidden"
           // Match the container's aspect ratio to the source video so
@@ -509,24 +528,6 @@ function SpillFeed({
             ref={canvasRef}
             className="absolute inset-0 w-full h-full object-contain pointer-events-none"
           />
-          <div className="absolute top-2 left-2 flex flex-wrap gap-1.5">
-            <Badge
-              variant="outline"
-              className="gap-1.5 backdrop-blur bg-white/85"
-              style={{ borderColor: COLOR_SPILL, color: COLOR_SPILL }}
-            >
-              <Droplets className="w-3 h-3" />
-              Spill
-            </Badge>
-            <Badge
-              variant="outline"
-              className="gap-1.5 backdrop-blur bg-white/85"
-              style={{ borderColor: COLOR_CONE, color: COLOR_CONE }}
-            >
-              <Cone className="w-3 h-3" />
-              Wet floor sign
-            </Badge>
-          </div>
         </div>
 
         <div className="flex items-center gap-1.5 text-xs text-slate-500 justify-end">
@@ -546,6 +547,39 @@ function SpillFeed({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+interface ThresholdSliderProps {
+  id: string;
+  label: string;
+  color: string;
+  value: number;
+  onChange: (value: number) => void;
+}
+
+// Compact 0-1 confidence slider with the current value rendered
+// inline in the label color. Step is 0.05 - finer increments add
+// no signal because Claude's calibrated confidences rarely fall on
+// sub-five-point grid lines anyway.
+function ThresholdSlider({ id, label, color, value, onChange }: ThresholdSliderProps) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <Label htmlFor={id} className="text-xs text-slate-600">{label}</Label>
+        <span className="text-xs font-mono tabular-nums" style={{ color }}>
+          {value.toFixed(2)}
+        </span>
+      </div>
+      <Slider
+        id={id}
+        min={0}
+        max={1}
+        step={0.05}
+        value={[value]}
+        onValueChange={(v) => onChange(v[0] ?? value)}
+      />
+    </div>
   );
 }
 
@@ -571,22 +605,3 @@ async function _persistCycle(body: {
   }
 }
 
-function _formatMs(ms: number): string {
-  if (!Number.isFinite(ms) || ms < 0) return "-";
-  if (ms < 1000) return `${Math.round(ms)} ms`;
-  const secs = ms / 1000;
-  if (secs < 10) return `${secs.toFixed(2)}s`;
-  if (secs < 60) return `${secs.toFixed(1)}s`;
-  const m = Math.floor(secs / 60);
-  const s = Math.floor(secs % 60);
-  return `${m}m ${s}s`;
-}
-
-function _formatRelative(iso: string): string {
-  const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "";
-  const deltaSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (deltaSec < 60) return `${deltaSec}s ago`;
-  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
-  return new Date(ts).toLocaleTimeString();
-}

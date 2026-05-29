@@ -783,8 +783,8 @@ is the operator path, Zerobus is the on-ramp.
 | Demo page          | Model id           | Serving endpoint           | What it does                                                  |
 | ------------------ | ------------------ | -------------------------- | ------------------------------------------------------------- |
 | Live               | `yolo`             | `lensiq-detector`          | General-purpose YOLOv8: people, vehicles, products            |
-| Spills             | `spill`            | `lensiq-spill`             | Liquid on the floor                                           |
-| Spills             | `wet_floor_sign`   | `lensiq-wet-floor-sign`    | Yellow caution cone deployment                                |
+| Spills             | `spill`            | `databricks-claude-*` (`llm`) | Claude vision: wet patches on the floor (shared call)         |
+| Spills             | `wet_floor_sign`   | `databricks-claude-*` (`llm`) | Claude vision: yellow caution cone (same call as `spill`)     |
 | Plates             | `license_plate`    | `lensiq-license-plate`     | Plate detection (paired with Claude vision OCR)               |
 | Guests             | `yolo`             | `lensiq-detector`          | Person + vehicle tracking, two feeds in parallel              |
 | Camera Clarity     | `fog_detector`     | `lensiq-fog-detector`      | Pillow + numpy lens-condition diagnostic, no GPU              |

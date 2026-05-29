@@ -46,16 +46,11 @@ export const SERVING_ALIASES: Record<string, ServingAliasConfig> = {
     displayName: "License plate detector",
     deployJob: "lensiq_deploy_roboflow_detectors",
   },
-  spill: {
-    envVar: "DATABRICKS_SERVING_ENDPOINT_SPILL",
-    displayName: "Spill detector",
-    deployJob: "lensiq_deploy_roboflow_detectors",
-  },
-  wet_floor_sign: {
-    envVar: "DATABRICKS_SERVING_ENDPOINT_WET_FLOOR_SIGN",
-    displayName: "Wet floor sign detector",
-    deployJob: "lensiq_deploy_roboflow_detectors",
-  },
+  // spill + wet_floor_sign are intentionally NOT listed here: both
+  // run through the `llm` alias via server/vision-detector.ts, so
+  // there is no dedicated endpoint to probe / surface "not deployed"
+  // hints for. Model id -> vision-detector dispatch happens inside
+  // /api/detect; everything else is unchanged.
   cigarette_vape: {
     envVar: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE",
     displayName: "Cigarette / vape detector",

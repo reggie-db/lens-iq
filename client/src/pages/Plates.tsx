@@ -10,8 +10,10 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
+import { formatRelative } from "../lib/format";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { useBatchFlush } from "../lib/useBatchFlush";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 
 // JPEG quality for the plate crop we persist + render. The crop is
@@ -127,7 +129,11 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
     [],
   );
 
-  const pendingRef = useRef<PendingRead[]>([]);
+  const pendingRef = useBatchFlush<PendingRead>({
+    isActive,
+    endpoint: "/api/plate-reads",
+    intervalMs: POST_INTERVAL_MS,
+  });
   // Mirror of the most recent plate text we've already accepted, used by
   // the OCR callback to dedupe. We can't read recentPlates state directly
   // inside useCallback because the closure captures a stale snapshot.
@@ -208,25 +214,6 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!isActive) return;
-    const flush = async () => {
-      const batch = pendingRef.current.splice(0, pendingRef.current.length);
-      if (batch.length === 0) return;
-      try {
-        const res = await fetch("/api/plate-reads", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ batch }),
-        });
-        if (!res.ok) pendingRef.current.unshift(...batch);
-      } catch {
-        pendingRef.current.unshift(...batch);
-      }
-    };
-    const id = setInterval(flush, POST_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [isActive]);
 
   const sessionStats = useMemo(() => {
     const unique = new Set(sessionReads.map((r) => r.plate));
@@ -347,7 +334,7 @@ function RecentPlatesCard({ plates }: RecentPlatesCardProps) {
                     {p.plateText}
                   </div>
                   <div className="text-xs text-slate-500 tabular-nums mt-0.5">
-                    {_formatRelative(new Date(p.capturedAt).toISOString())}
+                    {formatRelative(new Date(p.capturedAt).toISOString())}
                   </div>
                 </div>
               </li>
@@ -722,11 +709,3 @@ async function _cropPlateImage(
   return out.toDataURL("image/jpeg", PLATE_CROP_JPEG_QUALITY);
 }
 
-function _formatRelative(iso: string): string {
-  const ts = new Date(iso).getTime();
-  if (!Number.isFinite(ts)) return "";
-  const deltaSec = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (deltaSec < 60) return `${deltaSec}s ago`;
-  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`;
-  return new Date(ts).toLocaleTimeString();
-}

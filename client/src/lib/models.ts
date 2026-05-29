@@ -9,8 +9,8 @@
 //   ------------------|--------------------|---------------------------
 //   yolo              | detector           | lensiq-detector
 //   license_plate     | license_plate      | lensiq-license-plate
-//   spill             | spill              | lensiq-spill
-//   wet_floor_sign    | wet_floor_sign     | lensiq-wet-floor-sign
+//   spill             | llm                | databricks-claude-* (foundation)
+//   wet_floor_sign    | llm                | databricks-claude-* (foundation)
 //   cigarette_vape    | cigarette_vape     | lensiq-cigarette-vape
 //   slip_fall         | slip_fall          | lensiq-slip-fall
 //   fog_detector      | fog_detector       | lensiq-fog-detector
@@ -19,6 +19,14 @@
 // and bound to a real endpoint in resources/app.yml. There is no dispatch
 // layer: the client sends `model_id` to the server, the server maps it to
 // `model.servingAlias` and invokes that endpoint directly.
+//
+// Spill + wet-floor-sign are the exception: off-the-shelf Roboflow
+// models miss the subtle wet patches and miscellaneous caution cones
+// you actually see in supermarket CCTV (see server/vision-detector.ts
+// for the story). Both short-circuit /api/detect through one Claude
+// vision call on the shared `llm` alias, with the second call per
+// frame served from an image-hash cache so two-class detection costs
+// one LLM round-trip per frame.
 //
 // `color` drives the bounding-box overlay and chart tinting on the Live
 // page.
@@ -54,17 +62,17 @@ export const MODELS: ModelDefinition[] = [
   {
     id: "spill",
     name: "Spills",
-    description: "Detects liquid spills on store floors and forecourts. Pair with the wet-floor sign model to confirm signage.",
+    description: "Detects liquid spills on store floors and forecourts using a Databricks-hosted Claude vision model. Pair with the wet-floor sign model to confirm signage.",
     provider: "databricks",
-    servingAlias: "spill",
+    servingAlias: "llm",
     color: "#eab308",
   },
   {
     id: "wet_floor_sign",
     name: "Wet floor sign",
-    description: "Detects wet-floor caution signs. Pair with the spill model to validate that signage is deployed.",
+    description: "Detects wet-floor caution cones using the same Databricks-hosted Claude vision call as the spill detector. Pair with the spill model to validate that signage is deployed.",
     provider: "databricks",
-    servingAlias: "wet_floor_sign",
+    servingAlias: "llm",
     color: "#f97316",
   },
   {
