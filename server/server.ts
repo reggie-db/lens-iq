@@ -850,6 +850,91 @@ const AppKit = await createApp({
         });
       });
 
+      // ─── Lakebase schema bootstrap ─────────────────────────────────────
+      //
+      // The app SP has `CAN_CONNECT_AND_CREATE` on the bound Lakebase
+      // database (see resources/app.yml -> postgres) which lets it create
+      // *new* schemas / extensions / tables but does NOT grant write access
+      // to the built-in `public` schema, nor to any schema owned by another
+      // role (Postgres 15+ default). So every table this app owns lives in
+      // a dedicated schema created at runtime by the SP, which is implicitly
+      // the schema's owner and therefore has full DDL/DML rights.
+      //
+      // Schema name follows the recommendation in the Cursor `databricks-apps`
+      // skill's appkit/lakebase reference (the troubleshooting entry for
+      // `permission denied for schema public` calls out `app_data`
+      // specifically). Note that `databricks_postgres` is the default
+      // *database* name in Lakebase Autoscaling, not a schema, and is what
+      // PGDATABASE already resolves to.
+      const APP_SCHEMA = "app_data";
+
+      // Treat the duplicate-key races that `CREATE EXTENSION IF NOT EXISTS`
+      // and `CREATE INDEX IF NOT EXISTS` can throw under concurrency as a
+      // success. Postgres's internal catalog inserts (pg_type, pg_class,
+      // pg_namespace) aren't synchronized against parallel "create if not
+      // exists" callers, so two clients racing on extension/index install
+      // surface as `duplicate key value violates unique constraint
+      // "pg_type_typname_nsp_index"` / "pg_class_relname_nsp_index" /
+      // "pg_namespace_nspname_index". Once the loser of the race retries
+      // the read, the object exists, which is exactly the state we wanted.
+      function _isCreateRace(err: unknown): boolean {
+        const message = err instanceof Error ? err.message : String(err);
+        return (
+          message.includes("duplicate key value violates unique constraint")
+          && (message.includes("pg_type_typname_nsp_index")
+            || message.includes("pg_class_relname_nsp_index")
+            || message.includes("pg_namespace_nspname_index")
+            || message.includes("pg_extension_name_index"))
+        );
+      }
+
+      async function _runIdempotentDdl(sql: string): Promise<void> {
+        try {
+          await appkit.lakebase.query(sql);
+        } catch (err) {
+          if (_isCreateRace(err)) return;
+          throw err;
+        }
+      }
+
+      // Memoized so concurrent first-callers await the same CREATE SCHEMA
+      // pass rather than all firing CREATE SCHEMA at once. On failure the
+      // promise is cleared so the next caller retries from scratch.
+      let _appSchemaReady: Promise<void> | null = null;
+      const _ensureAppSchema = (): Promise<void> => {
+        if (_appSchemaReady) return _appSchemaReady;
+        const pending = _runIdempotentDdl(`CREATE SCHEMA IF NOT EXISTS ${APP_SCHEMA}`);
+        _appSchemaReady = pending.catch((err) => {
+          _appSchemaReady = null;
+          throw err;
+        });
+        return _appSchemaReady;
+      };
+
+      // Lakebase table backing the Guests page guest-count flush. Same
+      // lazy ensure pattern as plate_reads / fog_observations / spill_cycles
+      // below so a fresh Lakebase project works without any manual
+      // migration.
+      let _guestCountsTableEnsured = false;
+      const _ensureGuestCountsTable = async (): Promise<void> => {
+        if (_guestCountsTableEnsured) return;
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.guest_counts (
+            id           BIGSERIAL PRIMARY KEY,
+            ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_id    TEXT NOT NULL,
+            zone         TEXT NOT NULL,
+            person_count INT NOT NULL,
+            store_id     TEXT
+          )
+        `);
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_guest_counts_ts ON ${APP_SCHEMA}.guest_counts (ts DESC)`,
+        );
+        _guestCountsTableEnsured = true;
+      };
+
       // Guest-count persistence backed by Lakebase Postgres. The Guests page
       // posts batched zone counts here; the time-series chart reads recent
       // buckets back out.
@@ -881,8 +966,9 @@ const AppKit = await createApp({
           params.push(source_id, zone, count, store_id);
           placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`);
         }
-        const stmt = `INSERT INTO guest_counts (source_id, zone, person_count, store_id) VALUES ${placeholders.join(", ")}`;
+        const stmt = `INSERT INTO ${APP_SCHEMA}.guest_counts (source_id, zone, person_count, store_id) VALUES ${placeholders.join(", ")}`;
         try {
+          await _ensureGuestCountsTable();
           const result = await appkit.lakebase.query(stmt, params);
           res.json({ inserted: result.rowCount ?? 0 });
         } catch (err) {
@@ -995,8 +1081,9 @@ const AppKit = await createApp({
       let _plateReadsTableEnsured = false;
       const _ensurePlateReadsTable = async (): Promise<void> => {
         if (_plateReadsTableEnsured) return;
-        await appkit.lakebase.query(`
-          CREATE TABLE IF NOT EXISTS plate_reads (
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.plate_reads (
             id                   BIGSERIAL PRIMARY KEY,
             ts                   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             source_id            TEXT NOT NULL,
@@ -1010,11 +1097,11 @@ const AppKit = await createApp({
         // Add the column on existing deployments where the table predates
         // the image-capture feature. Postgres treats this as a no-op when
         // the column is already present.
-        await appkit.lakebase.query(
-          "ALTER TABLE plate_reads ADD COLUMN IF NOT EXISTS plate_image TEXT",
+        await _runIdempotentDdl(
+          `ALTER TABLE ${APP_SCHEMA}.plate_reads ADD COLUMN IF NOT EXISTS plate_image TEXT`,
         );
-        await appkit.lakebase.query(
-          "CREATE INDEX IF NOT EXISTS idx_plate_reads_ts ON plate_reads (ts DESC)",
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_plate_reads_ts ON ${APP_SCHEMA}.plate_reads (ts DESC)`,
         );
         _plateReadsTableEnsured = true;
       };
@@ -1059,7 +1146,7 @@ const AppKit = await createApp({
           params.push(source_id, plate_text, confidence, ocr_model, det_conf, plate_image);
           placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
         }
-        const stmt = `INSERT INTO plate_reads (source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image) VALUES ${placeholders.join(", ")}`;
+        const stmt = `INSERT INTO ${APP_SCHEMA}.plate_reads (source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image) VALUES ${placeholders.join(", ")}`;
         try {
           await _ensurePlateReadsTable();
           const result = await appkit.lakebase.query(stmt, params);
@@ -1076,7 +1163,7 @@ const AppKit = await createApp({
         try {
           await _ensurePlateReadsTable();
           const result = await appkit.lakebase.query<{ id: number; ts: string; source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null; plate_image: string | null }>(
-            "SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image FROM plate_reads ORDER BY ts DESC LIMIT $1",
+            `SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image FROM ${APP_SCHEMA}.plate_reads ORDER BY ts DESC LIMIT $1`,
             [limit],
           );
           res.json({ rows: result.rows });
@@ -1100,8 +1187,9 @@ const AppKit = await createApp({
       let _fogTableEnsured = false;
       const _ensureFogTable = async () => {
         if (_fogTableEnsured) return;
-        await appkit.lakebase.query(`
-          CREATE TABLE IF NOT EXISTS fog_observations (
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.fog_observations (
             id           BIGSERIAL PRIMARY KEY,
             ts           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             source_id    TEXT NOT NULL,
@@ -1111,11 +1199,11 @@ const AppKit = await createApp({
             area_pct     REAL NOT NULL DEFAULT 0
           )
         `);
-        await appkit.lakebase.query(
-          "CREATE INDEX IF NOT EXISTS idx_fog_observations_ts ON fog_observations (ts DESC)",
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_fog_observations_ts ON ${APP_SCHEMA}.fog_observations (ts DESC)`,
         );
-        await appkit.lakebase.query(
-          "CREATE INDEX IF NOT EXISTS idx_fog_observations_source_ts ON fog_observations (source_id, ts DESC)",
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_fog_observations_source_ts ON ${APP_SCHEMA}.fog_observations (source_id, ts DESC)`,
         );
         _fogTableEnsured = true;
       };
@@ -1159,7 +1247,7 @@ const AppKit = await createApp({
           params.push(source_id, camera_label, fogged, region_count, area_pct);
           placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
         }
-        const stmt = `INSERT INTO fog_observations (source_id, camera_label, fogged, region_count, area_pct) VALUES ${placeholders.join(", ")}`;
+        const stmt = `INSERT INTO ${APP_SCHEMA}.fog_observations (source_id, camera_label, fogged, region_count, area_pct) VALUES ${placeholders.join(", ")}`;
         try {
           await _ensureFogTable();
           const result = await appkit.lakebase.query(stmt, params);
@@ -1189,7 +1277,7 @@ const AppKit = await createApp({
             MAX(area_pct) AS max_area_pct,
             SUM(CASE WHEN fogged THEN 1 ELSE 0 END) AS fogged_ticks,
             COUNT(*) AS total_ticks
-          FROM fog_observations
+          FROM ${APP_SCHEMA}.fog_observations
           WHERE ts >= NOW() - ($2 || ' seconds')::interval
           GROUP BY source_id, camera_label, bucket_ts
           ORDER BY bucket_ts ASC, source_id ASC
@@ -1229,7 +1317,7 @@ const AppKit = await createApp({
             area_pct: number;
           }>(
             `SELECT id, ts, source_id, camera_label, region_count, area_pct
-             FROM fog_observations
+             FROM ${APP_SCHEMA}.fog_observations
              WHERE fogged = TRUE
              ORDER BY ts DESC
              LIMIT $1`,
@@ -1257,8 +1345,9 @@ const AppKit = await createApp({
       let _spillCyclesTableEnsured = false;
       const _ensureSpillCyclesTable = async () => {
         if (_spillCyclesTableEnsured) return;
-        await appkit.lakebase.query(`
-          CREATE TABLE IF NOT EXISTS spill_cycles (
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.spill_cycles (
             id              BIGSERIAL PRIMARY KEY,
             ts              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             source_id       TEXT NOT NULL,
@@ -1268,8 +1357,8 @@ const AppKit = await createApp({
             was_assisted    BOOLEAN NOT NULL DEFAULT FALSE
           )
         `);
-        await appkit.lakebase.query(
-          "CREATE INDEX IF NOT EXISTS idx_spill_cycles_ts ON spill_cycles (ts DESC)",
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_spill_cycles_ts ON ${APP_SCHEMA}.spill_cycles (ts DESC)`,
         );
         _spillCyclesTableEnsured = true;
       };
@@ -1297,7 +1386,7 @@ const AppKit = await createApp({
         try {
           await _ensureSpillCyclesTable();
           const result = await appkit.lakebase.query(
-            `INSERT INTO spill_cycles (source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted)
+            `INSERT INTO ${APP_SCHEMA}.spill_cycles (source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id`,
             [source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted],
@@ -1325,7 +1414,7 @@ const AppKit = await createApp({
             was_assisted: boolean;
           }>(
             `SELECT id, ts, source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted
-             FROM spill_cycles
+             FROM ${APP_SCHEMA}.spill_cycles
              ORDER BY ts DESC
              LIMIT $1`,
             [limit],
@@ -1351,7 +1440,7 @@ const AppKit = await createApp({
           }>(
             `WITH recent AS (
                SELECT response_ms, ts
-               FROM spill_cycles
+               FROM ${APP_SCHEMA}.spill_cycles
                ORDER BY ts DESC
                LIMIT 50
              )
@@ -1395,35 +1484,7 @@ const AppKit = await createApp({
       // Embeddings are stored as `vector(512)` (pgvector). HNSW index
       // on cosine ops so per-tick matches stay constant-time even with
       // a few hundred enrolled faces.
-      // Treat the duplicate-key races that `CREATE EXTENSION IF NOT EXISTS`
-      // and `CREATE INDEX IF NOT EXISTS` can throw under concurrency as a
-      // success. Postgres's internal catalog inserts (pg_type, pg_class,
-      // pg_namespace) aren't synchronized against parallel "create if not
-      // exists" callers, so two clients racing on extension/index install
-      // surface as `duplicate key value violates unique constraint
-      // "pg_type_typname_nsp_index"` / "pg_class_relname_nsp_index" /
-      // "pg_namespace_nspname_index". Once the loser of the race retries
-      // the read, the object exists, which is exactly the state we wanted.
-      function _isCreateRace(err: unknown): boolean {
-        const message = err instanceof Error ? err.message : String(err);
-        return (
-          message.includes("duplicate key value violates unique constraint")
-          && (message.includes("pg_type_typname_nsp_index")
-            || message.includes("pg_class_relname_nsp_index")
-            || message.includes("pg_namespace_nspname_index")
-            || message.includes("pg_extension_name_index"))
-        );
-      }
-
-      async function _runIdempotentDdl(sql: string): Promise<void> {
-        try {
-          await appkit.lakebase.query(sql);
-        } catch (err) {
-          if (_isCreateRace(err)) return;
-          throw err;
-        }
-      }
-
+      //
       // Race-safe ensure: store the in-flight promise so concurrent callers
       // await the same DDL pass instead of all firing CREATE EXTENSION /
       // CREATE TABLE at once and stomping on each other.
@@ -1431,13 +1492,14 @@ const AppKit = await createApp({
       const _ensureFacesTables = (): Promise<void> => {
         if (_facesTablesReady) return _facesTablesReady;
         const pending = (async () => {
+          await _ensureAppSchema();
           // pgvector ships with Lakebase but is not enabled by default per
           // database; CREATE EXTENSION IF NOT EXISTS is idempotent and the
           // app SP has CAN_CONNECT_AND_CREATE so it's allowed to install
           // extensions on the bound database.
           await _runIdempotentDdl("CREATE EXTENSION IF NOT EXISTS vector");
           await _runIdempotentDdl(`
-            CREATE TABLE IF NOT EXISTS faces (
+            CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.faces (
               id           BIGSERIAL PRIMARY KEY,
               name         TEXT NOT NULL,
               role         TEXT NOT NULL CHECK (role IN ('banned', 'vip', 'staff')),
@@ -1451,14 +1513,14 @@ const AppKit = await createApp({
           // opclass matches the `<=>` operator we use in /api/face-match.
           await _runIdempotentDdl(`
             CREATE INDEX IF NOT EXISTS idx_faces_embedding
-              ON faces USING hnsw (embedding vector_cosine_ops)
+              ON ${APP_SCHEMA}.faces USING hnsw (embedding vector_cosine_ops)
           `);
           await _runIdempotentDdl(`
-            CREATE TABLE IF NOT EXISTS face_matches (
+            CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.face_matches (
               id          BIGSERIAL PRIMARY KEY,
               ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
               source_id   TEXT NOT NULL,
-              face_id     BIGINT REFERENCES faces(id) ON DELETE SET NULL,
+              face_id     BIGINT REFERENCES ${APP_SCHEMA}.faces(id) ON DELETE SET NULL,
               name        TEXT NOT NULL,
               role        TEXT NOT NULL,
               similarity  REAL NOT NULL,
@@ -1470,7 +1532,7 @@ const AppKit = await createApp({
             )
           `);
           await _runIdempotentDdl(
-            "CREATE INDEX IF NOT EXISTS idx_face_matches_ts ON face_matches (ts DESC)",
+            `CREATE INDEX IF NOT EXISTS idx_face_matches_ts ON ${APP_SCHEMA}.face_matches (ts DESC)`,
           );
         })();
         // Cache only on success; if the first pass fails the next caller
@@ -1588,7 +1650,7 @@ const AppKit = await createApp({
           // image cap; legit thumbnails are <50KB.
           const thumbnail = image.length <= 750_000 ? image : null;
           const insert = await appkit.lakebase.query<{ id: number; created_at: string }>(
-            `INSERT INTO faces (name, role, image, embedding, det_score)
+            `INSERT INTO ${APP_SCHEMA}.faces (name, role, image, embedding, det_score)
              VALUES ($1, $2, $3, $4::vector, $5)
              RETURNING id, created_at`,
             [name, role, thumbnail, _toPgVector(primary.embedding), primary.det_score],
@@ -1610,7 +1672,7 @@ const AppKit = await createApp({
             id: number; name: string; role: string; image: string | null;
             det_score: number | null; created_at: string;
           }>(
-            "SELECT id, name, role, image, det_score, created_at FROM faces ORDER BY created_at DESC",
+            `SELECT id, name, role, image, det_score, created_at FROM ${APP_SCHEMA}.faces ORDER BY created_at DESC`,
           );
           res.json({ faces: result.rows });
         } catch (err) {
@@ -1629,7 +1691,7 @@ const AppKit = await createApp({
         try {
           await _ensureFacesTables();
           const result = await appkit.lakebase.query(
-            "DELETE FROM faces WHERE id = $1",
+            `DELETE FROM ${APP_SCHEMA}.faces WHERE id = $1`,
             [id],
           );
           res.json({ deleted: result.rowCount ?? 0 });
@@ -1715,7 +1777,7 @@ const AppKit = await createApp({
             }>(
               `SELECT id, name, role, image,
                       1 - (embedding <=> $1::vector) AS similarity
-               FROM faces
+               FROM ${APP_SCHEMA}.faces
                ORDER BY embedding <=> $1::vector
                LIMIT 1`,
               [_toPgVector(face.embedding)],
@@ -1743,7 +1805,7 @@ const AppKit = await createApp({
                 // 750KB matches the plate image cap.
                 const frame_image = image.length <= 750_000 ? image : null;
                 await appkit.lakebase.query(
-                  `INSERT INTO face_matches
+                  `INSERT INTO ${APP_SCHEMA}.face_matches
                      (source_id, face_id, name, role, similarity,
                       bbox_x1, bbox_y1, bbox_x2, bbox_y2, frame_image)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
@@ -1777,8 +1839,8 @@ const AppKit = await createApp({
             `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
                     m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
                     f.image AS enrolled_image
-             FROM face_matches m
-             LEFT JOIN faces f ON f.id = m.face_id
+             FROM ${APP_SCHEMA}.face_matches m
+             LEFT JOIN ${APP_SCHEMA}.faces f ON f.id = m.face_id
              ORDER BY m.ts DESC LIMIT $1`,
             [limit],
           );
@@ -1830,8 +1892,8 @@ const AppKit = await createApp({
               `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
                       m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
                       f.image AS enrolled_image
-               FROM face_matches m
-               LEFT JOIN faces f ON f.id = m.face_id
+               FROM ${APP_SCHEMA}.face_matches m
+               LEFT JOIN ${APP_SCHEMA}.faces f ON f.id = m.face_id
                WHERE m.ts > $1::timestamptz
                ORDER BY m.ts ASC LIMIT 50`,
               [lastTs],
@@ -1872,12 +1934,13 @@ const AppKit = await createApp({
             to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
             ROUND(AVG(person_count)::numeric, 2)::float AS avg_count,
             MAX(person_count) AS max_count
-          FROM guest_counts
+          FROM ${APP_SCHEMA}.guest_counts
           WHERE ts >= NOW() - ($2 || ' seconds')::interval
           GROUP BY zone, bucket_ts
           ORDER BY bucket_ts ASC, zone ASC
         `;
         try {
+          await _ensureGuestCountsTable();
           const result = await appkit.lakebase.query<{ zone: string; bucket_ts: string; avg_count: number; max_count: number }>(stmt, [bucketSec, String(windowSec)]);
           res.json({ windowSec, bucketSec, rows: result.rows });
         } catch (err) {

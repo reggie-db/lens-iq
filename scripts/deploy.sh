@@ -13,7 +13,11 @@
 #      InfoPage reads from this volume at runtime so updates to the
 #      narrative don't require an app redeploy - re-run the sync script
 #      alone and reload the page.
-#   4. `databricks bundle run lens_iq` to push source code into the app and
+#   4. `scripts/grant-lakebase-schema.sh` to open the Lakebase app schema
+#      to PUBLIC so the app SP can write into it regardless of who happens
+#      to own the schema (covers the local-dev-before-deploy race; see the
+#      script header for the full explanation).
+#   5. `databricks bundle run lens_iq` to push source code into the app and
 #      start it.
 #
 # Defaults to the bundle's default target (`dev`). Override with -t or
@@ -24,19 +28,24 @@
 # Usage:
 #   scripts/deploy.sh                # → dev (default)
 #   scripts/deploy.sh -t dev         # → dev (explicit)
+#   scripts/deploy.sh --skip-sync    # skip steps 2-3 (volume re-sync)
+#   scripts/deploy.sh --skip-grants  # skip step 4 (Lakebase schema grants)
+#   scripts/deploy.sh --skip-run     # skip step 5 (`bundle run`)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
 TARGET="${TARGET:-}"
 SKIP_SYNC=0
+SKIP_GRANTS=0
 SKIP_RUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target) TARGET="$2"; shift 2 ;;
     --skip-sync) SKIP_SYNC=1; shift ;;
+    --skip-grants) SKIP_GRANTS=1; shift ;;
     --skip-run) SKIP_RUN=1; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -59,6 +68,11 @@ if [[ "$SKIP_SYNC" -eq 0 ]]; then
   scripts/sync-sample-videos.sh ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"}
   _log "sync-presenter-content.sh $LABEL"
   scripts/sync-presenter-content.sh ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"}
+fi
+
+if [[ "$SKIP_GRANTS" -eq 0 ]]; then
+  _log "grant-lakebase-schema.sh"
+  scripts/grant-lakebase-schema.sh
 fi
 
 if [[ "$SKIP_RUN" -eq 0 ]]; then
