@@ -1,5 +1,5 @@
 import { createReadStream } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import { analytics, createApp, files, lakebase, serving, server, sql } from "@databricks/appkit";
@@ -11,6 +11,7 @@ import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
 import { detectWithClaude, type VisionDetection } from "./vision-detector.ts";
 import { decodeImage, toBase64Body, toDataUrl } from "./image-data-url.ts";
 import { extractChatText, extractJsonObject } from "./llm-response.ts";
+import { rewriteTalkTrack } from "./talk-track-rewrite.ts";
 import {
   asyncRoute,
   buildBatchInsert,
@@ -322,6 +323,64 @@ async function _streamLocalPresenterContent(
   res.setHeader("Cache-Control", "no-store");
   createReadStream(fullPath).pipe(res);
   return true;
+}
+
+// Read a presenter-content file (the source of truth for the booth
+// talk track and HTML deck) as a UTF-8 string. Used by the talk-track
+// rewrite route which needs the markdown bytes in process rather than
+// streamed to a response. Mirrors the local-then-volume resolution order
+// of the streaming variants. Returns null on miss so the caller can
+// translate to a 404.
+async function _readPresenterContentText(
+  def: PresenterContentDef,
+  volume: SampleVolume,
+): Promise<string | null> {
+  const local = await _readLocalPresenterContentText(def);
+  if (local !== null) return local;
+  return await _readVolumePresenterContentText(volume, def);
+}
+
+async function _readLocalPresenterContentText(
+  def: PresenterContentDef,
+): Promise<string | null> {
+  const fullPath = resolvePath(LOCAL_PRESENTER_CONTENT_DIR, def.filename);
+  if (!fullPath.startsWith(`${LOCAL_PRESENTER_CONTENT_DIR}/`)) return null;
+  try {
+    const stats = await stat(fullPath);
+    if (!stats.isFile()) return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  return await readFile(fullPath, "utf-8");
+}
+
+async function _readVolumePresenterContentText(
+  volume: SampleVolume,
+  def: PresenterContentDef,
+): Promise<string | null> {
+  let body: Awaited<ReturnType<SampleVolume["download"]>>;
+  try {
+    body = await volume.download(def.filename);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("FILES_API_FILE_NOT_FOUND") || msg.includes("Not Found")) return null;
+    console.warn(`presenter_content text download failed for ${def.filename}:`, msg);
+    return null;
+  }
+  if (!body.contents) return null;
+  const reader = (body.contents as ReadableStream<Uint8Array>).getReader();
+  const chunks: Uint8Array[] = [];
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks).toString("utf-8");
 }
 
 // Stream a presenter-content file from the UC volume via the files plugin's
@@ -645,6 +704,46 @@ const AppKit = await createApp({
           if (await _streamLocalPresenterContent(def, res)) return;
           if (await _streamVolumePresenterContent(appkit.files("presenter_content"), def, res)) return;
           throw new HttpError(404, `${def.filename} not found locally or in the presenter_content volume.`);
+        },
+      ));
+
+      // POST /api/talk-track/transform
+      //
+      // Rewrites the booth talk track (docs/dais-talk-track.md) for a
+      // given speaker persona, audience persona, and target read time.
+      // Sourced from the same presenter-content resolution chain as
+      // GET /api/presenter-content/talk-track so the rewrite always
+      // matches the markdown the page would otherwise render. The
+      // foundation-model call goes through the `llm` serving alias, and
+      // (sourceHash, persona tuple) results are cached by
+      // server/talk-track-rewrite.ts so repeat requests inside an hour
+      // are a Map lookup. The UI shows the original markdown by default
+      // and only hits this route when the presenter clicks "Customize".
+      const TalkTrackTransformBody = z.object({
+        speakerPersona: z.string().trim().min(1).max(80),
+        audiencePersona: z.string().trim().min(1).max(80),
+        lengthMinutes: z.number().int().min(1).max(15),
+      });
+
+      app.post("/api/talk-track/transform", asyncRoute(
+        { body: TalkTrackTransformBody },
+        async ({ body }) => {
+          const def = PRESENTER_CONTENT["talk-track"];
+          const source = await _readPresenterContentText(
+            def,
+            appkit.files("presenter_content"),
+          );
+          if (!source) {
+            throw new HttpError(
+              404,
+              `${def.filename} not found locally or in the presenter_content volume.`,
+            );
+          }
+          return await rewriteTalkTrack(appkit, source, {
+            speakerPersona: body.speakerPersona,
+            audiencePersona: body.audiencePersona,
+            lengthMinutes: body.lengthMinutes,
+          });
         },
       ));
 

@@ -185,7 +185,7 @@ What to say:
 > camera *before* downstream models silently miss things. Sustained fog
 > opens a cleaning ticket. The same governance, same Lakebase row stream."
 
-### Stop 6: Facial Recognition (`/facial-recognition`)
+### Stop 6: Facial Recognition (`/faces`)
 
 What to do:
 1. Click **Facial Recognition** in the sidebar.
@@ -220,11 +220,14 @@ Why this matters to the buyer:
 - **Lakebase is the operator database AND the vector index.** Same
   Postgres connection, same governance, no extra system to procure or
   patch. Enrolled faces, match history, and the live tap-to-acknowledge
-  are all in one place.
+  are all in one place. Per-face dedup (a 30-second cool-down per
+  `face_id`) keeps the match stream readable - a lingering subject is
+  one row, not fifty.
 - **The customer's own model, the customer's own data.** The enrolled
-  set never leaves their workspace. The endpoint runs in their account.
-  No images shipped to a third-party SaaS, which is the answer to the
-  privacy question before it gets asked.
+  set never leaves their workspace. The endpoint runs in their account
+  on CPU only (`CPUExecutionProvider`), with no outbound network at
+  inference time. The model pack is bundled inside the MLflow artifact
+  so there's no CDN call at cold start.
 - **The pipeline is identical to every other detector.** Frame -> serving
   endpoint -> Lakebase row -> Genie can ask about it. Pull this one out
   for **retail loss prevention**, **hospitality VIP recognition**, and
@@ -472,7 +475,7 @@ The talk track for these is identical to spill: it's a model on its own
 endpoint, every detection lands in Delta and Lakebase, Genie can ask
 questions in English. The customer gets a model, not a stack.
 
-### 4.6 - Facial recognition (`/facial-recognition`)
+### 4.6 - Facial recognition (`/faces`)
 
 What the model sees:
 - **InsightFace `buffalo_l`** runs as a single serving endpoint that
