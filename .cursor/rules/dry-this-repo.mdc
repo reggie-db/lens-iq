@@ -9,99 +9,121 @@ Always grep / read before writing. Most "new code" in this repo has a
 helper that already exists. If you find yourself writing one of the
 patterns below, stop and reuse / extract.
 
-## Always-apply checklist (before sending the diff)
+## Server helpers (in `server/util.ts` unless noted)
 
-1. **Reuse first.** Search the repo for the function you're about to
-   write. Common targets:
-   - Async one-shot init -> `_once()` in `server/server.ts`.
-   - Best-effort DDL -> `_runIdempotentDdl()` in `server/server.ts`.
-   - Stream a file from disk or volume -> the `_streamLocal*` /
-     `_streamVolume*` helpers in `server/server.ts`.
-   - Serving response unwrap -> `_extractDetectionCandidates()` /
-     `_extractFaces()` (merge into one if you add a third caller).
-   - JSON fetch with typed errors -> `fetchJson()` in
-     `client/src/lib/serving-status.ts`.
-   - Endpoint-not-deployed envelope -> `EndpointNotDeployedError`
-     + `sendEndpointError(res, err)`.
-   - Camera / detection tick / sample-video plumbing -> hooks in
-     `client/src/lib/use*.ts`.
-2. **Library first.** Don't hand-roll what AppKit / appkit-ui already
-   ship. Before adding code that talks to Databricks, check what's
-   installed:
+| Need | Helper |
+| --- | --- |
+| Async one-shot init (table/index bootstrap) | `onceAsync(fn)` |
+| Best-effort DDL that tolerates ownership skips | `_runIdempotentDdl(sql)` in `server/server.ts` |
+| Validate + handle a route, throw on bad input, JSON-encode the return | `asyncRoute({body, query, params}, handler)` |
+| Multi-row INSERT with `$N` placeholders | `buildBatchInsert(table, columns, rows)` |
+| Cap a base64/data-URL payload before persisting to Postgres | `inlineBlob(value)` |
+| Return a typed HTTP error from a route | `throw new HttpError(status, message)` |
+| Stream a file from disk or volume | `_streamLocal*` / `_streamVolume*` in `server/server.ts` |
+| JSON fetch with typed errors (client) | `fetchJson()` in `client/src/lib/serving-status.ts` |
+| Detection / sample-video plumbing (client) | `useDetectionLoop` / `useSampleVideoStream` / `useWebcamStream` |
+
+The error middleware is mounted at the end of `onPluginsReady`. It
+turns the following into the right HTTP response:
+
+- `HttpError` -> its status + `{error: message}`
+- `ZodError` -> 400 with the offending field path
+- `EndpointNotDeployedError` -> 503 envelope the UI branches on
+- anything else -> 500 with the thrown message
+
+That means **routes should `throw`** instead of writing
+`res.status(500).json(...); return;`. The whole point of
+`asyncRoute` is that the per-route try/catch goes away.
+
+## Library-first (don't re-implement what's installed)
+
+1. **AppKit plugins.** Before talking to Databricks, check:
    ```bash
    npx @databricks/appkit plugin list
    npx @databricks/appkit docs --full
    ```
-   Use the GA export at `node_modules/@databricks/appkit/dist/plugins/ga-exports.generated.d.ts`
-   as the source of truth for what's available.
-3. **UI primitives** come from `@databricks/appkit-ui/react`. Reach
-   for `Empty`, `Skeleton`, `Spinner`, `Alert`, `Toaster`, `Card` etc.
-   before writing one yourself. Do not add a new toast / loading /
-   empty-state library.
-4. **Throw, don't envelope.** Express 5 propagates async throws to the
-   error middleware. New routes should `throw` the error and let the
-   centralized handler send `{error}`; don't wrap every route in
-   `try/catch { res.status(500).json(...) }`. The 13 existing
-   per-route catches are technical debt, not the pattern to copy.
-5. **No silent swallows.** Returning `null` / `[]` / `{ok:false}`
-   from a catch loses the failure. Either re-throw, log + re-throw, or
-   document explicitly why the failure is benign (the swallowed
-   bootstrap-DDL warns in `_runIdempotentDdl` are the *only* place
-   this is acceptable, and they `console.warn` the SQL on the way out).
-6. **Validate with schemas, not `typeof`.** If you're typing
-   `typeof body?.x === "string" ? body.x : null` you're doing it
-   wrong. Either:
-   - extract a `validateBody(schema, req, res)` helper (preferred -
-     install `zod` and use it for every new route), or
-   - if you genuinely cannot add a dep, hoist the validator into a
-     reusable function (`parseBatchOrThrow`, `requireStringField`,
-     etc.) rather than copy-pasting another column-count's worth of
-     `typeof` chains.
-7. **DDL via the established helpers only.** Schema/table/index
-   bootstrap goes through `_once(async () => { await _ensureAppSchema(); ... })`
-   in `server/server.ts`. Never add a new boolean `*Ensured` flag.
-   Never call `appkit.lakebase.query` for DDL directly - use
-   `_runIdempotentDdl`.
-8. **Batch inserts share the placeholder pattern.** Four routes today
-   build `($1,$2,$3),($4,$5,$6)...` by hand with
-   `const base = params.length`. If you write a fifth, extract
-   `buildBatchInsert(table, columns, rows)` into a server util first.
-9. **SSE routes share the same skeleton.** `/api/detections/stream` and
-   `/api/face-matches/stream` are 95% the same. If you add a third,
-   extract `streamSse(req, res, { onTick, intervalMs, heartbeatMs })`
-   first.
-10. **One source of truth for catalogs.** `MODELS`, `SAMPLE_VIDEOS`,
-    `PRESENTER_CONTENT` are imported by both server and client.
-    New runtime catalogs go in `client/src/lib/*.ts` and are imported
-    from `server/server.ts`. Never duplicate.
-11. **Magic numbers that repeat are constants.** The 750_000 byte
-    inline-blob cap appears in 3 places. The 200/100/400 batch caps
-    appear in 4. New repetition of the same number = pull it up to
-    a named constant at the top of the file (or a shared
-    `server/constants.ts` once there's a third use).
-12. **Scripts share `scripts/_sync-lib.sh`.** Any new
-    `scripts/sync-*.sh` must source it and use
-    `sync_parse_target` / `sync_resolve_volume` / `sync_run`. Do not
-    re-implement `bundle summary` parsing or `databricks sync`
-    invocation. See `scripts/sync-sample-videos.sh` for the minimal
-    example.
+   GA + beta export lists live at
+   `node_modules/@databricks/appkit/dist/plugins/{ga,beta}-exports.generated.d.ts`.
+2. **AppKit pool is the only Postgres pool.** Every SQL statement goes
+   through `appkit.lakebase.query(sql, params)`. Do not import
+   `pg`, `postgres`, `drizzle-orm/node-postgres`, `kysely`, or any
+   client that spins its own `pg.Pool` from `getOrmConfig()` /
+   `getPgConfig()`. A second pool defeats AppKit's OAuth refresh and
+   graceful drain and burns connection slots on the instance.
+3. **UI primitives** come from `@databricks/appkit-ui/react`: `Empty`,
+   `Skeleton`, `Spinner`, `Alert`, `Toaster`, `Card`, `Badge`,
+   `Button`, etc. The toast notification system is `Toaster` (mounted
+   in `client/src/main.tsx`) backed by `sonner` (`import { toast }
+   from "sonner"`). Do not add `react-hot-toast` back.
+4. **Validation** is `zod`. Every new route gets a schema, not a
+   `typeof body?.x === "string"` ladder.
+
+## Always-apply checklist (before sending the diff)
+
+1. **Did you `throw new HttpError(...)` instead of
+   `res.status(...).json({error}).return`?** If you wrote a
+   per-route try/catch envelope, delete it - `asyncRoute` already
+   forwards to the error middleware.
+2. **Did you use a zod schema?** No new `typeof body?.x === "string"`,
+   `Number(req.query.limit ?? 50); Number.isFinite ? Math.min(...) : 50`,
+   or `if (!body || !body.x) { res.status(400)... }` chains. Schema
+   defaults handle the limit clamp:
+   `z.coerce.number().int().min(1).max(200).default(50)`.
+3. **Did you use `buildBatchInsert` for the multi-row INSERT?** Don't
+   hand-roll `($1,$2),($3,$4)` placeholders.
+4. **Did you `onceAsync(...)` the bootstrap?** No new boolean
+   `*Ensured` flags. No bare `await _ensureXTable()` chains that
+   re-run the full DDL per request.
+5. **Did you wire `_ensureXTable()` through `_runIdempotentDdl`?**
+   Don't `await appkit.lakebase.query(CREATE_INDEX_...)` directly -
+   it can't swallow the ownership skip and will 500 in local dev.
+6. **Did you reuse `inlineBlob()` for the 750KB cap?** Three callers
+   today, growing.
+7. **One source of truth for catalogs.** `MODELS`, `SAMPLE_VIDEOS`,
+   `PRESENTER_CONTENT` are imported by both server and client. New
+   runtime catalogs go in `client/src/lib/*.ts` and are imported
+   from `server/server.ts`.
+8. **Magic numbers that repeat are constants.** Cap repeated values
+   (`PG_INLINE_BLOB_MAX`, `FACE_MATCH_DEDUP_MS`,
+   `FACE_MATCH_DEFAULT_THRESHOLD`, `SSE_HEARTBEAT_MS`,
+   `POLL_INTERVAL_MS`) - don't inline `750_000`, `30_000`, `0.45`
+   anywhere new.
+9. **Scripts share `scripts/_sync-lib.sh`.** Any new
+   `scripts/sync-*.sh` must source it and use `sync_parse_target` /
+   `sync_resolve_volume` / `sync_run`.
+10. **SSE routes share the same skeleton.** `/api/detections/stream`
+    and `/api/face-matches/stream` are 95% the same. If you add a
+    third, extract `streamSse(req, res, { onTick, intervalMs,
+    heartbeatMs })` into `server/util.ts` first.
 
 ## Anti-patterns to refuse on sight
 
-- New `let _xxxTableEnsured = false;` flag - use `_once()`.
-- New `catch (err) { const message = err instanceof Error ? err.message : String(err); res.status(500).json(...) }` - throw instead.
-- New `typeof body?.x === "string" ? ... : null` ladder - validator helper.
-- New `Number(req.query.limit ?? 50); Number.isFinite ? Math.min(...) : 50` - share a `parseLimit(query, opts)` helper.
-- New `console.warn("...failed:", err)` followed by silently continuing - either re-throw or document why dropping the failure is correct.
-- New `react-hot-toast` import in a fresh file - use the appkit-ui `Toaster` so we can remove the standalone dep.
-- New `try { JSON.parse(x) } catch { return null }` - use the existing `_extractJsonObject()` salvage helper or just throw.
-- New `useEffect` + `setInterval` + manual cleanup in a page - reach for the `useDetectionLoop` / `useSampleVideoStream` style hook first, or propose adding `@tanstack/react-query`.
+- `let _xxxTableEnsured = false;` flag - use `onceAsync`.
+- `catch (err) { res.status(500).json({error: ...}); return; }` - throw
+  `HttpError` or just `throw err` and let the middleware respond.
+- `typeof body?.x === "string" ? ... : null` ladder - zod schema.
+- `Number(req.query.X ?? D); Number.isFinite ? Math.min(...) : D` - 
+  zod schema with `z.coerce.number().int().min().max().default()`.
+- `console.warn("...failed:", err)` followed by silently returning -
+  either re-throw or document the swallow (the only sanctioned
+  swallow today is `_runIdempotentDdl`'s ownership skip).
+- New `pg` / `pg.Pool` import, new `postgres` (postgres.js), new
+  `drizzle-orm` setup, new `kysely`. All Postgres goes through
+  `appkit.lakebase.query()`.
+- New `react-hot-toast` import - use `sonner`'s `toast`; the `Toaster`
+  is already mounted from `@databricks/appkit-ui/react`.
+- New `useEffect` + `setInterval` + manual cleanup in a page - reach
+  for the existing `useDetectionLoop` / `useSampleVideoStream` style
+  hook first, or propose adding `@tanstack/react-query`.
+- Hand-rolled `($1, $2, $3), ($4, $5, $6)` placeholder builder - use
+  `buildBatchInsert`.
 
 ## When you do extract a helper
 
 - Lives next to the second caller's file unless it has 3+ callers,
-  then promote to `server/util.ts` / `client/src/lib/util.ts`.
+  then promote to `server/util.ts` or `client/src/lib/util.ts`.
 - Stays small. Five-line helpers are fine. If it's growing parameters
-  to fit two callers it's the wrong abstraction - inline and rethink.
-- Has the JSDoc / comment explain *why* it exists (the race, the
-  ownership skip, the dedup window). The how is in the code.
+  to fit two callers, it's the wrong abstraction - inline and rethink.
+- Has a comment explaining *why* it exists (the race, the ownership
+  skip, the dedup window, the AppKit pool constraint). The how is in
+  the code.

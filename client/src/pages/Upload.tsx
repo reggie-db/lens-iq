@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import toast from "react-hot-toast";
+import { toast } from "sonner";
 import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label } from "@databricks/appkit-ui/react";
 import { Upload as UploadIcon } from "lucide-react";
 import { SNAPSHOT_MAX_DIMENSION, resizeDataUrlForDetection } from "../lib/camera";

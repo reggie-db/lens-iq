@@ -3,10 +3,19 @@ import { stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import { analytics, createApp, files, lakebase, serving, server, sql } from "@databricks/appkit";
+import { z } from "zod";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
 import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
+import {
+  asyncRoute,
+  buildBatchInsert,
+  errorMiddleware,
+  HttpError,
+  inlineBlob,
+  onceAsync,
+} from "./util.ts";
 
 const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
 const VIDEO_CONTENT_TYPE = "video/mp4";
@@ -585,21 +594,21 @@ const AppKit = await createApp({
         res.redirect(302, "/mobile.html");
       });
 
-      app.get("/api/serving-status/:alias", async (req, res) => {
-        const alias = typeof req.params.alias === "string" ? req.params.alias : "";
-        if (!alias) {
-          res.status(400).json({ error: "Missing serving alias." });
-          return;
-        }
-        const force = req.query.force === "1" || req.query.force === "true";
-        try {
-          const status = await getServingStatus(alias, { force });
-          res.json(status);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({ error: `Serving status failed (${alias}): ${message}` });
-        }
+      const ServingStatusParams = z.object({ alias: z.string().min(1) });
+      const ServingStatusQuery = z.object({
+        force: z.enum(["1", "true"]).optional().transform((v) => v != null),
       });
+      app.get("/api/serving-status/:alias", asyncRoute(
+        { params: ServingStatusParams, query: ServingStatusQuery },
+        async ({ params, query }) => {
+          try {
+            return await getServingStatus(params.alias, { force: query.force });
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            throw new HttpError(502, `Serving status failed (${params.alias}): ${message}`);
+          }
+        },
+      ));
 
       // ─── Sample videos ──────────────────────────────────────────────────
       //
@@ -675,90 +684,73 @@ const AppKit = await createApp({
         });
       });
 
-      app.get("/api/presenter-content/:id", async (req, res) => {
-        const def = PRESENTER_CONTENT[req.params.id];
-        if (!def) {
-          res.status(404).json({ error: `Unknown presenter content id: ${req.params.id}` });
-          return;
-        }
-        try {
+      const IdParam = z.object({ id: z.string().min(1) });
+
+      app.get("/api/presenter-content/:id", asyncRoute(
+        { params: IdParam },
+        async ({ params }, _req, res) => {
+          const def = PRESENTER_CONTENT[params.id];
+          if (!def) throw new HttpError(404, `Unknown presenter content id: ${params.id}`);
           if (await _streamLocalPresenterContent(def, res)) return;
           if (await _streamVolumePresenterContent(appkit.files("presenter_content"), def, res)) return;
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Presenter content stream failed: ${message}` });
-          return;
-        }
-        res.status(404).json({
-          error: `${def.filename} not found locally or in the presenter_content volume.`,
-        });
+          throw new HttpError(404, `${def.filename} not found locally or in the presenter_content volume.`);
+        },
+      ));
+
+      app.get("/api/sample-videos/:id", asyncRoute(
+        { params: IdParam },
+        async ({ params }, req, res) => {
+          const sample = getSampleVideo(params.id);
+          if (!sample) throw new HttpError(404, `Unknown sample id: ${params.id}`);
+          if (sample.local) {
+            if (await _streamLocalSampleVideo(sample.local, req, res)) return;
+            if (await _streamVolumeSampleVideo(appkit.files("sample_videos"), sample.local, res)) return;
+            throw new HttpError(404, `Sample ${sample.id} not found locally or in the sample_videos volume.`);
+          }
+          if (sample.upstream) {
+            await _proxyUpstreamSampleVideo(sample.upstream, req, res);
+            return;
+          }
+          throw new HttpError(500, `Sample ${sample.id} is misconfigured (no local or upstream source).`);
+        },
+      ));
+
+      const DetectBody = z.object({
+        image: z.string().min(1),
+        conf: z.number().default(0.35),
+        iou: z.number().default(0.5),
+        persist: z.boolean().default(false),
+        model: z.string().default(DEFAULT_MODEL_ID),
       });
 
-      app.get("/api/sample-videos/:id", async (req, res) => {
-        const sample = getSampleVideo(req.params.id);
-        if (!sample) {
-          res.status(404).json({ error: `Unknown sample id: ${req.params.id}` });
-          return;
-        }
-
-        if (sample.local) {
-          if (await _streamLocalSampleVideo(sample.local, req, res)) return;
-          if (await _streamVolumeSampleVideo(appkit.files("sample_videos"), sample.local, res)) return;
-          res.status(404).json({
-            error: `Sample ${sample.id} not found locally or in the sample_videos volume.`,
-          });
-          return;
-        }
-
-        if (sample.upstream) {
-          await _proxyUpstreamSampleVideo(sample.upstream, req, res);
-          return;
-        }
-
-        res.status(500).json({
-          error: `Sample ${sample.id} is misconfigured (no local or upstream source).`,
-        });
-      });
-
-      app.post("/api/detect", async (req, res) => {
-        const { image, conf = 0.35, iou = 0.5, persist = false, model: modelId = DEFAULT_MODEL_ID } = req.body ?? {};
-        if (!image || typeof image !== "string") {
-          res.status(400).json({ error: "Missing required `image` (base64 data URL or raw base64)." });
-          return;
-        }
-
-        const model = getModel(typeof modelId === "string" ? modelId : DEFAULT_MODEL_ID);
-        if (!model) {
-          res.status(400).json({ error: `Unknown model id: ${modelId}` });
-          return;
-        }
+      app.post("/api/detect", asyncRoute({ body: DetectBody }, async ({ body }) => {
+        const model = getModel(body.model);
+        if (!model) throw new HttpError(400, `Unknown model id: ${body.model}`);
 
         // Build the dataframe_records payload for the served PyFunc.
         // Every detector endpoint hosts exactly one model so there is no
         // dispatch column - the alias alone routes to the right endpoint.
         // `iou` is YOLO-only but the Roboflow + fog PyFuncs ignore unknown
         // row columns, so it's safe to send unconditionally.
-        const row: Record<string, unknown> = { image, conf, iou };
-
         let detections: NormalizedDetection[] = [];
         try {
-          const data = await invokeServing(appkit, model.servingAlias, { dataframe_records: [row] });
+          const data = await invokeServing(appkit, model.servingAlias, {
+            dataframe_records: [{ image: body.image, conf: body.conf, iou: body.iou }],
+          });
           detections = _normalizeDatabricks(data);
         } catch (err) {
-          // EndpointNotDeployedError gets a structured 503 so the UI can
-          // surface the exact `databricks bundle run ...` to run. Every
-          // other failure keeps the existing "Detector failed (<id>): ..."
-          // shape that the client already renders.
-          if (sendEndpointError(res, err)) return;
+          // EndpointNotDeployedError is handled by the global error
+          // middleware (-> 503 envelope the UI branches on). Everything
+          // else gets the existing "Detector failed (<id>): ..." shape.
+          if (err instanceof Error && err.name === "EndpointNotDeployedError") throw err;
           const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({ error: `Detector failed (${model.id}): ${message}` });
-          return;
+          throw new HttpError(502, `Detector failed (${model.id}): ${message}`);
         }
 
         let saved: { frame_id: string; url: string } | null = null;
-        if (persist === true) {
+        if (body.persist) {
           try {
-            const buffer = _decodeImage(image);
+            const buffer = _decodeImage(body.image);
             if (!buffer) throw new Error("Could not decode base64 image.");
             const frameId = `frame_${Date.now()}`;
             const fileName = `${frameId}.jpg`;
@@ -772,8 +764,6 @@ const AppKit = await createApp({
             const baseId = Date.now();
             const storeId = STORE_IDS[Math.floor(Math.random() * STORE_IDS.length)];
             const ts = new Date().toISOString();
-            // All numeric columns in the seeded table are BIGINT (PySpark infers
-            // Python `int` as LongType), so use sql.bigint() throughout.
             for (let i = 0; i < detections.length; i++) {
               const d = detections[i];
               await appkit.analytics.query(DETECTIONS_INSERT_SQL, {
@@ -795,12 +785,15 @@ const AppKit = await createApp({
               url: `/api/files/frames/raw?path=${encodeURIComponent(fileName)}`,
             };
           } catch (err) {
+            // Persistence is best-effort - the user already got the
+            // detections back; we just can't replay them later. Log so
+            // the failure is visible without 5xx-ing the live response.
             console.warn("Persist failed:", err);
           }
         }
 
-        res.json({ detections, saved });
-      });
+        return { detections, saved };
+      }));
 
       app.get("/api/detections/stream", async (req, res) => {
         res.setHeader("Content-Type", "text/event-stream");
@@ -905,29 +898,7 @@ const AppKit = await createApp({
         }
       }
 
-      // Memoize a one-shot async bootstrap so concurrent first-callers await
-      // the *same* in-flight promise instead of all racing through the same
-      // DDL chain. Without this every per-request `_ensureXTable()` re-runs
-      // the full CREATE TABLE + CREATE INDEX sequence each time two requests
-      // land in the same tick (e.g. one fog observation per camera per
-      // tick), spamming the logs and burning round trips.
-      //
-      // On failure the cached promise is cleared so the next caller retries
-      // from scratch instead of inheriting a poisoned promise.
-      function _once<T>(fn: () => Promise<T>): () => Promise<T> {
-        let pending: Promise<T> | null = null;
-        return () => {
-          if (pending) return pending;
-          const p = fn();
-          pending = p.catch((err) => {
-            pending = null;
-            throw err;
-          }) as Promise<T>;
-          return pending;
-        };
-      }
-
-      const _ensureAppSchema = _once(() =>
+      const _ensureAppSchema = onceAsync(() =>
         _runIdempotentDdl(`CREATE SCHEMA IF NOT EXISTS ${APP_SCHEMA}`),
       );
 
@@ -935,7 +906,7 @@ const AppKit = await createApp({
       // lazy ensure pattern as plate_reads / fog_observations / spill_cycles
       // below so a fresh Lakebase project works without any manual
       // migration.
-      const _ensureGuestCountsTable = _once(async () => {
+      const _ensureGuestCountsTable = onceAsync(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.guest_counts (
@@ -955,44 +926,29 @@ const AppKit = await createApp({
       // Guest-count persistence backed by Lakebase Postgres. The Guests page
       // posts batched zone counts here; the time-series chart reads recent
       // buckets back out.
-      app.post("/api/guest-counts", async (req, res) => {
-        const body = req.body as { batch?: Array<{ source_id?: unknown; zone?: unknown; person_count?: unknown; store_id?: unknown }> } | undefined;
-        const batch = Array.isArray(body?.batch) ? body!.batch : null;
-        if (!batch || batch.length === 0) {
-          res.status(400).json({ error: "Body must include non-empty `batch`." });
-          return;
-        }
-        if (batch.length > 200) {
-          res.status(413).json({ error: "Batch too large (max 200 rows)." });
-          return;
-        }
-        // Build a single multi-row INSERT with parameter placeholders so we
-        // round-trip the database once per batch instead of per-row.
-        const params: unknown[] = [];
-        const placeholders: string[] = [];
-        for (const row of batch) {
-          const source_id = typeof row.source_id === "string" ? row.source_id : null;
-          const zone = typeof row.zone === "string" ? row.zone : null;
-          const count = typeof row.person_count === "number" && row.person_count >= 0 ? Math.floor(row.person_count) : null;
-          const store_id = typeof row.store_id === "string" ? row.store_id : null;
-          if (!source_id || !zone || count === null) {
-            res.status(400).json({ error: "Each row needs source_id (string), zone (string), person_count (non-negative int)." });
-            return;
-          }
-          const base = params.length;
-          params.push(source_id, zone, count, store_id);
-          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4})`);
-        }
-        const stmt = `INSERT INTO ${APP_SCHEMA}.guest_counts (source_id, zone, person_count, store_id) VALUES ${placeholders.join(", ")}`;
-        try {
-          await _ensureGuestCountsTable();
-          const result = await appkit.lakebase.query(stmt, params);
-          res.json({ inserted: result.rowCount ?? 0 });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase insert failed: ${message}` });
-        }
+      const GuestCountRow = z.object({
+        source_id: z.string().min(1),
+        zone: z.string().min(1),
+        person_count: z.number().int().min(0),
+        store_id: z.string().nullish(),
       });
+      const GuestCountsBatch = z.object({
+        batch: z.array(GuestCountRow).min(1).max(200),
+      });
+
+      app.post("/api/guest-counts", asyncRoute(
+        { body: GuestCountsBatch },
+        async ({ body }) => {
+          await _ensureGuestCountsTable();
+          const { sql: stmt, params } = buildBatchInsert(
+            `${APP_SCHEMA}.guest_counts`,
+            ["source_id", "zone", "person_count", "store_id"],
+            body.batch,
+          );
+          const result = await appkit.lakebase.query(stmt, params);
+          return { inserted: result.rowCount ?? 0 };
+        },
+      ));
 
       // License plate OCR. The Plates page sends a cropped image (typically
       // the bbox region returned by the YOLO vehicle detector). We forward
@@ -1016,14 +972,11 @@ const AppKit = await createApp({
       // example reliably enough that the plate bbox comes through on
       // the overwhelming majority of reads; when it doesn't, the
       // client falls back to the full OCR crop with no apology.
-      app.post("/api/plate-ocr", async (req, res) => {
-        const body = req.body as { image?: unknown } | undefined;
-        const image = typeof body?.image === "string" ? body.image : null;
-        if (!image) {
-          res.status(400).json({ error: "Body must include `image` as a data URL or base64 string." });
-          return;
-        }
-        const dataUrl = image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`;
+      const PlateOcrBody = z.object({ image: z.string().min(1) });
+      app.post("/api/plate-ocr", asyncRoute({ body: PlateOcrBody }, async ({ body }) => {
+        const dataUrl = body.image.startsWith("data:")
+          ? body.image
+          : `data:image/jpeg;base64,${body.image}`;
         const prompt = [
           "You are a license plate OCR helper looking at a still image from a security camera.",
           "Two outputs are required: the alphanumeric plate text AND a tight rectangle around the plate. Both fields are mandatory whenever a plate is visible.",
@@ -1075,18 +1028,18 @@ const AppKit = await createApp({
           } catch {
             // Fall through with nulls; raw still goes back for debugging.
           }
-          res.json({
+          return {
             plate_text: plateText,
             plate_bbox: plateBbox,
             raw,
             model: process.env.DATABRICKS_SERVING_ENDPOINT_LLM ?? null,
-          });
+          };
         } catch (err) {
-          if (sendEndpointError(res, err)) return;
+          if (err instanceof Error && err.name === "EndpointNotDeployedError") throw err;
           const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `OCR call failed: ${message}` });
+          throw new HttpError(500, `OCR call failed: ${message}`);
         }
-      });
+      }));
 
       // Lakebase table backing the Plates page. The DDL lives here (rather
       // than a separate migration step) for the same reason fog_observations
@@ -1095,7 +1048,7 @@ const AppKit = await createApp({
       // ADD COLUMN IF NOT EXISTS rider is so older deployments (which
       // created the table without `plate_image`) pick up the new column
       // automatically on next boot.
-      const _ensurePlateReadsTable = _once(async () => {
+      const _ensurePlateReadsTable = onceAsync(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.plate_reads (
@@ -1127,65 +1080,53 @@ const AppKit = await createApp({
       // (or the full OCR crop when Claude didn't return a bbox) so the
       // Plates page and any downstream consumers can replay what the OCR
       // model actually saw.
-      app.post("/api/plate-reads", async (req, res) => {
-        const body = req.body as { batch?: Array<{ source_id?: unknown; plate_text?: unknown; confidence?: unknown; ocr_model?: unknown; detection_confidence?: unknown; plate_image?: unknown }> } | undefined;
-        const batch = Array.isArray(body?.batch) ? body!.batch : null;
-        if (!batch || batch.length === 0) {
-          res.status(400).json({ error: "Body must include non-empty `batch`." });
-          return;
-        }
-        if (batch.length > 100) {
-          res.status(413).json({ error: "Batch too large (max 100 rows)." });
-          return;
-        }
-        const params: unknown[] = [];
-        const placeholders: string[] = [];
-        for (const row of batch) {
-          const source_id = typeof row.source_id === "string" ? row.source_id : null;
-          const plate_text = typeof row.plate_text === "string" ? row.plate_text.toUpperCase() : null;
-          const confidence = typeof row.confidence === "number" && row.confidence >= 0 ? row.confidence : null;
-          const ocr_model = typeof row.ocr_model === "string" ? row.ocr_model : null;
-          const det_conf = typeof row.detection_confidence === "number" ? row.detection_confidence : null;
-          // Defensive cap on data URL size so a misbehaving client can't
-          // wedge the postgres row size limit. ~750KB is well above a
-          // legitimate plate crop (~10-30KB) but below TOAST's 1MB inline
-          // threshold so the row still stays compact.
-          const plate_image_raw = typeof row.plate_image === "string" ? row.plate_image : null;
-          const plate_image = plate_image_raw && plate_image_raw.length <= 750_000 ? plate_image_raw : null;
-          if (!source_id || !plate_text || confidence === null) {
-            res.status(400).json({ error: "Each row needs source_id, plate_text, confidence." });
-            return;
-          }
-          const base = params.length;
-          params.push(source_id, plate_text, confidence, ocr_model, det_conf, plate_image);
-          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6})`);
-        }
-        const stmt = `INSERT INTO ${APP_SCHEMA}.plate_reads (source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image) VALUES ${placeholders.join(", ")}`;
-        try {
-          await _ensurePlateReadsTable();
-          const result = await appkit.lakebase.query(stmt, params);
-          res.json({ inserted: result.rowCount ?? 0 });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase insert failed: ${message}` });
-        }
+      const PlateReadRow = z.object({
+        source_id: z.string().min(1),
+        plate_text: z.string().min(1).transform((s) => s.toUpperCase()),
+        confidence: z.number().min(0),
+        ocr_model: z.string().nullish(),
+        detection_confidence: z.number().nullish(),
+        plate_image: z.string().nullish().transform((v) => inlineBlob(v ?? null)),
+      });
+      const PlateReadsBatch = z.object({
+        batch: z.array(PlateReadRow).min(1).max(100),
       });
 
-      app.get("/api/plate-reads/recent", async (req, res) => {
-        const limitRaw = Number(req.query.limit ?? 50);
-        const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
-        try {
+      app.post("/api/plate-reads", asyncRoute(
+        { body: PlateReadsBatch },
+        async ({ body }) => {
           await _ensurePlateReadsTable();
-          const result = await appkit.lakebase.query<{ id: number; ts: string; source_id: string; plate_text: string; confidence: number; ocr_model: string | null; detection_confidence: number | null; plate_image: string | null }>(
-            `SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image FROM ${APP_SCHEMA}.plate_reads ORDER BY ts DESC LIMIT $1`,
-            [limit],
+          const { sql: stmt, params } = buildBatchInsert(
+            `${APP_SCHEMA}.plate_reads`,
+            ["source_id", "plate_text", "confidence", "ocr_model", "detection_confidence", "plate_image"],
+            body.batch,
           );
-          res.json({ rows: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
+          const result = await appkit.lakebase.query(stmt, params);
+          return { inserted: result.rowCount ?? 0 };
+        },
+      ));
+
+      const LimitQuery = z.object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
       });
+
+      type PlateReadRowOut = {
+        id: number; ts: string; source_id: string; plate_text: string;
+        confidence: number; ocr_model: string | null;
+        detection_confidence: number | null; plate_image: string | null;
+      };
+      app.get("/api/plate-reads/recent", asyncRoute(
+        { query: LimitQuery },
+        async ({ query }) => {
+          await _ensurePlateReadsTable();
+          const r = await appkit.lakebase.query<PlateReadRowOut>(
+            `SELECT id, ts, source_id, plate_text, confidence, ocr_model, detection_confidence, plate_image
+               FROM ${APP_SCHEMA}.plate_reads ORDER BY ts DESC LIMIT $1`,
+            [query.limit],
+          );
+          return { rows: r.rows };
+        },
+      ));
 
       // ─── Camera health / fog observations ─────────────────────────────
       //
@@ -1198,7 +1139,7 @@ const AppKit = await createApp({
       //
       // Table is created lazily on first POST so the demo works on a
       // fresh Lakebase project without any manual migration.
-      const _ensureFogTable = _once(async () => {
+      const _ensureFogTable = onceAsync(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.fog_observations (
@@ -1219,127 +1160,90 @@ const AppKit = await createApp({
         );
       });
 
-      app.post("/api/fog-observations", async (req, res) => {
-        const body = req.body as {
-          batch?: Array<{
-            source_id?: unknown;
-            camera_label?: unknown;
-            fogged?: unknown;
-            region_count?: unknown;
-            area_pct?: unknown;
-          }>;
-        } | undefined;
-        const batch = Array.isArray(body?.batch) ? body!.batch : null;
-        if (!batch || batch.length === 0) {
-          res.status(400).json({ error: "Body must include non-empty `batch`." });
-          return;
-        }
-        if (batch.length > 400) {
-          res.status(413).json({ error: "Batch too large (max 400 rows)." });
-          return;
-        }
-        const params: unknown[] = [];
-        const placeholders: string[] = [];
-        for (const row of batch) {
-          const source_id = typeof row.source_id === "string" ? row.source_id : null;
-          const camera_label = typeof row.camera_label === "string" ? row.camera_label : null;
-          const fogged = typeof row.fogged === "boolean" ? row.fogged : null;
-          const region_count = typeof row.region_count === "number" && row.region_count >= 0
-            ? Math.floor(row.region_count) : null;
-          const area_pct = typeof row.area_pct === "number" && row.area_pct >= 0
-            ? Math.min(100, row.area_pct) : null;
-          if (!source_id || !camera_label || fogged === null || region_count === null || area_pct === null) {
-            res.status(400).json({
-              error: "Each row needs source_id, camera_label, fogged, region_count, area_pct.",
-            });
-            return;
-          }
-          const base = params.length;
-          params.push(source_id, camera_label, fogged, region_count, area_pct);
-          placeholders.push(`($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5})`);
-        }
-        const stmt = `INSERT INTO ${APP_SCHEMA}.fog_observations (source_id, camera_label, fogged, region_count, area_pct) VALUES ${placeholders.join(", ")}`;
-        try {
-          await _ensureFogTable();
-          const result = await appkit.lakebase.query(stmt, params);
-          res.json({ inserted: result.rowCount ?? 0 });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase insert failed: ${message}` });
-        }
+      const FogObsRow = z.object({
+        source_id: z.string().min(1),
+        camera_label: z.string().min(1),
+        fogged: z.boolean(),
+        region_count: z.number().int().min(0),
+        area_pct: z.number().min(0).max(100),
+      });
+      const FogObsBatch = z.object({
+        batch: z.array(FogObsRow).min(1).max(400),
       });
 
-      app.get("/api/fog-observations/recent", async (req, res) => {
-        const windowSecRaw = Number(req.query.windowSec ?? 600);
-        const windowSec = Number.isFinite(windowSecRaw)
-          ? Math.min(86_400, Math.max(60, Math.floor(windowSecRaw))) : 600;
-        const bucketSecRaw = Number(req.query.bucketSec ?? 30);
-        const bucketSec = Number.isFinite(bucketSecRaw)
-          ? Math.min(3_600, Math.max(5, Math.floor(bucketSecRaw))) : 30;
-        // Same bucketing pattern as guest_counts: floor(ts / bucketSec) * bucketSec
-        // gives us aligned buckets we can group by. AVG over the bucket so the
-        // y-axis stays "% of frame fogged" instead of "samples taken".
-        const stmt = `
-          SELECT
-            source_id,
-            camera_label,
-            to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
-            ROUND(AVG(area_pct)::numeric, 2)::float AS avg_area_pct,
-            MAX(area_pct) AS max_area_pct,
-            SUM(CASE WHEN fogged THEN 1 ELSE 0 END) AS fogged_ticks,
-            COUNT(*) AS total_ticks
-          FROM ${APP_SCHEMA}.fog_observations
-          WHERE ts >= NOW() - ($2 || ' seconds')::interval
-          GROUP BY source_id, camera_label, bucket_ts
-          ORDER BY bucket_ts ASC, source_id ASC
-        `;
-        try {
+      app.post("/api/fog-observations", asyncRoute(
+        { body: FogObsBatch },
+        async ({ body }) => {
           await _ensureFogTable();
-          const result = await appkit.lakebase.query<{
-            source_id: string;
-            camera_label: string;
-            bucket_ts: string;
-            avg_area_pct: number;
-            max_area_pct: number;
-            fogged_ticks: number;
-            total_ticks: number;
-          }>(stmt, [bucketSec, String(windowSec)]);
-          res.json({ windowSec, bucketSec, rows: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
+          const { sql: stmt, params } = buildBatchInsert(
+            `${APP_SCHEMA}.fog_observations`,
+            ["source_id", "camera_label", "fogged", "region_count", "area_pct"],
+            body.batch,
+          );
+          const result = await appkit.lakebase.query(stmt, params);
+          return { inserted: result.rowCount ?? 0 };
+        },
+      ));
+
+      const FogRecentQuery = z.object({
+        windowSec: z.coerce.number().int().min(60).max(86_400).default(600),
+        bucketSec: z.coerce.number().int().min(5).max(3_600).default(30),
       });
+      type FogBucketRow = {
+        source_id: string; camera_label: string; bucket_ts: string;
+        avg_area_pct: number; max_area_pct: number;
+        fogged_ticks: number; total_ticks: number;
+      };
+      app.get("/api/fog-observations/recent", asyncRoute(
+        { query: FogRecentQuery },
+        async ({ query }) => {
+          await _ensureFogTable();
+          // Same bucketing pattern as guest_counts:
+          // floor(ts / bucketSec) * bucketSec aligns buckets we can GROUP BY.
+          // AVG over the bucket so the y-axis stays "% of frame fogged"
+          // instead of "samples taken".
+          const r = await appkit.lakebase.query<FogBucketRow>(`
+            SELECT
+              source_id,
+              camera_label,
+              to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
+              ROUND(AVG(area_pct)::numeric, 2)::float AS avg_area_pct,
+              MAX(area_pct) AS max_area_pct,
+              SUM(CASE WHEN fogged THEN 1 ELSE 0 END) AS fogged_ticks,
+              COUNT(*) AS total_ticks
+            FROM ${APP_SCHEMA}.fog_observations
+            WHERE ts >= NOW() - ($2 || ' seconds')::interval
+            GROUP BY source_id, camera_label, bucket_ts
+            ORDER BY bucket_ts ASC, source_id ASC
+          `, [query.bucketSec, String(query.windowSec)]);
+          return { windowSec: query.windowSec, bucketSec: query.bucketSec, rows: r.rows };
+        },
+      ));
 
       // Most-recent rows where the camera was actually fogged, used by the
       // "Recent fog events" panel on the Camera Health page.
-      app.get("/api/fog-observations/incidents", async (req, res) => {
-        const limitRaw = Number(req.query.limit ?? 25);
-        const limit = Number.isFinite(limitRaw)
-          ? Math.min(100, Math.max(1, Math.floor(limitRaw))) : 25;
-        try {
-          await _ensureFogTable();
-          const result = await appkit.lakebase.query<{
-            id: number;
-            ts: string;
-            source_id: string;
-            camera_label: string;
-            region_count: number;
-            area_pct: number;
-          }>(
-            `SELECT id, ts, source_id, camera_label, region_count, area_pct
-             FROM ${APP_SCHEMA}.fog_observations
-             WHERE fogged = TRUE
-             ORDER BY ts DESC
-             LIMIT $1`,
-            [limit],
-          );
-          res.json({ rows: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
+      const IncidentsQuery = z.object({
+        limit: z.coerce.number().int().min(1).max(100).default(25),
       });
+      type FogIncidentRow = {
+        id: number; ts: string; source_id: string; camera_label: string;
+        region_count: number; area_pct: number;
+      };
+      app.get("/api/fog-observations/incidents", asyncRoute(
+        { query: IncidentsQuery },
+        async ({ query }) => {
+          await _ensureFogTable();
+          const r = await appkit.lakebase.query<FogIncidentRow>(
+            `SELECT id, ts, source_id, camera_label, region_count, area_pct
+               FROM ${APP_SCHEMA}.fog_observations
+               WHERE fogged = TRUE
+               ORDER BY ts DESC
+               LIMIT $1`,
+            [query.limit],
+          );
+          return { rows: r.rows };
+        },
+      ));
 
       // ─── Spill -> cone response cycles ────────────────────────────────
       //
@@ -1353,7 +1257,7 @@ const AppKit = await createApp({
       //
       // Table is created lazily on first POST so the demo works on a fresh
       // Lakebase project without any manual migration.
-      const _ensureSpillCyclesTable = _once(async () => {
+      const _ensureSpillCyclesTable = onceAsync(async () => {
         await _ensureAppSchema();
         await _runIdempotentDdl(`
           CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.spill_cycles (
@@ -1371,105 +1275,83 @@ const AppKit = await createApp({
         );
       });
 
-      app.post("/api/spill-cycles", async (req, res) => {
-        const body = req.body as {
-          source_id?: unknown;
-          spill_first_ts?: unknown;
-          cone_first_ts?: unknown;
-          response_ms?: unknown;
-          was_assisted?: unknown;
-        } | undefined;
-        const source_id = typeof body?.source_id === "string" ? body.source_id : null;
-        const spill_first_ts = typeof body?.spill_first_ts === "string" ? body.spill_first_ts : null;
-        const cone_first_ts = typeof body?.cone_first_ts === "string" ? body.cone_first_ts : null;
-        const response_ms = typeof body?.response_ms === "number" && body.response_ms >= 0
-          ? Math.floor(body.response_ms) : null;
-        const was_assisted = typeof body?.was_assisted === "boolean" ? body.was_assisted : false;
-        if (!source_id || !spill_first_ts || !cone_first_ts || response_ms === null) {
-          res.status(400).json({
-            error: "Body needs source_id, spill_first_ts, cone_first_ts, response_ms.",
-          });
-          return;
-        }
-        try {
+      const SpillCycleBody = z.object({
+        source_id: z.string().min(1),
+        spill_first_ts: z.string().min(1),
+        cone_first_ts: z.string().min(1),
+        response_ms: z.number().int().min(0),
+        was_assisted: z.boolean().default(false),
+      });
+
+      app.post("/api/spill-cycles", asyncRoute(
+        { body: SpillCycleBody },
+        async ({ body }) => {
           await _ensureSpillCyclesTable();
-          const result = await appkit.lakebase.query(
-            `INSERT INTO ${APP_SCHEMA}.spill_cycles (source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted)
+          const r = await appkit.lakebase.query(
+            `INSERT INTO ${APP_SCHEMA}.spill_cycles
+               (source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted)
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id`,
-            [source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted],
+            [body.source_id, body.spill_first_ts, body.cone_first_ts, body.response_ms, body.was_assisted],
           );
-          res.json({ inserted: result.rowCount ?? 0 });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase insert failed: ${message}` });
-        }
-      });
+          return { inserted: r.rowCount ?? 0 };
+        },
+      ));
 
-      app.get("/api/spill-cycles/recent", async (req, res) => {
-        const limitRaw = Number(req.query.limit ?? 25);
-        const limit = Number.isFinite(limitRaw)
-          ? Math.min(100, Math.max(1, Math.floor(limitRaw))) : 25;
-        try {
+      const SpillRecentQuery = z.object({
+        limit: z.coerce.number().int().min(1).max(100).default(25),
+      });
+      type SpillRecentRow = {
+        id: number; ts: string; source_id: string;
+        spill_first_ts: string; cone_first_ts: string;
+        response_ms: number; was_assisted: boolean;
+      };
+      app.get("/api/spill-cycles/recent", asyncRoute(
+        { query: SpillRecentQuery },
+        async ({ query }) => {
           await _ensureSpillCyclesTable();
-          const result = await appkit.lakebase.query<{
-            id: number;
-            ts: string;
-            source_id: string;
-            spill_first_ts: string;
-            cone_first_ts: string;
-            response_ms: number;
-            was_assisted: boolean;
-          }>(
+          const r = await appkit.lakebase.query<SpillRecentRow>(
             `SELECT id, ts, source_id, spill_first_ts, cone_first_ts, response_ms, was_assisted
-             FROM ${APP_SCHEMA}.spill_cycles
-             ORDER BY ts DESC
-             LIMIT $1`,
-            [limit],
-          );
-          res.json({ rows: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
-      });
-
-      app.get("/api/spill-cycles/summary", async (_req, res) => {
-        try {
-          await _ensureSpillCyclesTable();
-          // Avg / min / fastest over the last 50 cycles so a single demo run
-          // doesn't get drowned out by a backlog of slow historical cycles.
-          const result = await appkit.lakebase.query<{
-            cycles: number;
-            avg_response_ms: number | null;
-            min_response_ms: number | null;
-            last_response_ms: number | null;
-            last_ts: string | null;
-          }>(
-            `WITH recent AS (
-               SELECT response_ms, ts
                FROM ${APP_SCHEMA}.spill_cycles
                ORDER BY ts DESC
-               LIMIT 50
-             )
-             SELECT
-               COUNT(*)::int                                    AS cycles,
-               ROUND(AVG(response_ms))::int                     AS avg_response_ms,
-               MIN(response_ms)::int                            AS min_response_ms,
-               (SELECT response_ms FROM recent ORDER BY ts DESC LIMIT 1) AS last_response_ms,
-               (SELECT ts FROM recent ORDER BY ts DESC LIMIT 1)          AS last_ts
-             FROM recent`,
+               LIMIT $1`,
+            [query.limit],
           );
-          const row = result.rows[0] ?? {
-            cycles: 0, avg_response_ms: null, min_response_ms: null,
-            last_response_ms: null, last_ts: null,
-          };
-          res.json(row);
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
-      });
+          return { rows: r.rows };
+        },
+      ));
+
+      type SpillSummaryRow = {
+        cycles: number;
+        avg_response_ms: number | null;
+        min_response_ms: number | null;
+        last_response_ms: number | null;
+        last_ts: string | null;
+      };
+      app.get("/api/spill-cycles/summary", asyncRoute({}, async () => {
+        await _ensureSpillCyclesTable();
+        // Avg / min / fastest over the last 50 cycles so a single demo run
+        // doesn't get drowned out by a backlog of slow historical cycles.
+        const r = await appkit.lakebase.query<SpillSummaryRow>(
+          `WITH recent AS (
+             SELECT response_ms, ts
+             FROM ${APP_SCHEMA}.spill_cycles
+             ORDER BY ts DESC
+             LIMIT 50
+           )
+           SELECT
+             COUNT(*)::int                                            AS cycles,
+             ROUND(AVG(response_ms))::int                             AS avg_response_ms,
+             MIN(response_ms)::int                                    AS min_response_ms,
+             (SELECT response_ms FROM recent ORDER BY ts DESC LIMIT 1) AS last_response_ms,
+             (SELECT ts FROM recent ORDER BY ts DESC LIMIT 1)          AS last_ts
+           FROM recent`,
+        );
+        return r.rows[0] ?? {
+          cycles: 0, avg_response_ms: null, min_response_ms: null,
+          last_response_ms: null, last_ts: null,
+        };
+      }));
 
       // ─── Facial recognition ──────────────────────────────────────────
       //
@@ -1492,7 +1374,7 @@ const AppKit = await createApp({
       // Embeddings are stored as `vector(512)` (pgvector). HNSW index
       // on cosine ops so per-tick matches stay constant-time even with
       // a few hundred enrolled faces.
-      const _ensureFacesTables = _once(async () => {
+      const _ensureFacesTables = onceAsync(async () => {
         await _ensureAppSchema();
         // pgvector ships with Lakebase but is not enabled by default per
         // database; CREATE EXTENSION IF NOT EXISTS is idempotent and the
@@ -1615,84 +1497,68 @@ const AppKit = await createApp({
       //   stores the row, and returns the new face id + thumbnail. If no
       //   face is detected returns 422 so the client can surface a friendly
       //   "couldn't see a face in that photo" message.
-      app.post("/api/faces", async (req, res) => {
-        const body = req.body as { name?: unknown; role?: unknown; image?: unknown } | undefined;
-        const name = typeof body?.name === "string" ? body.name.trim() : "";
-        const role = typeof body?.role === "string" ? body.role.trim().toLowerCase() : "";
-        const image = typeof body?.image === "string" ? body.image : "";
-        if (!name || !["banned", "vip", "staff"].includes(role) || !image) {
-          res.status(400).json({ error: "Body needs name (string), role (banned|vip|staff), image (b64)." });
-          return;
+      const FaceEnrollBody = z.object({
+        name: z.string().trim().min(1),
+        role: z.enum(["banned", "vip", "staff"]),
+        image: z.string().min(1),
+      });
+
+      app.post("/api/faces", asyncRoute({ body: FaceEnrollBody }, async ({ body }) => {
+        await _ensureFacesTables();
+        const faces = await _embedFaces(body.image);
+        if (faces.length === 0) {
+          throw new HttpError(422, "No face detected in the uploaded image.");
         }
-        try {
-          await _ensureFacesTables();
-          const faces = await _embedFaces(image);
-          if (faces.length === 0) {
-            res.status(422).json({ error: "No face detected in the uploaded image." });
-            return;
-          }
-          // Pick the largest bbox (face closest to the camera) - works
-          // around photos where a background bystander also got embedded.
-          const primary = faces.reduce((best, f) => {
-            const aBest = (best.bbox[2] - best.bbox[0]) * (best.bbox[3] - best.bbox[1]);
-            const aCur = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]);
-            return aCur > aBest ? f : best;
-          });
-          // Defensive cap on the thumbnail size so a misbehaving client
-          // can't wedge the postgres row. ~750KB matches the plate
-          // image cap; legit thumbnails are <50KB.
-          const thumbnail = image.length <= 750_000 ? image : null;
-          const insert = await appkit.lakebase.query<{ id: number; created_at: string }>(
-            `INSERT INTO ${APP_SCHEMA}.faces (name, role, image, embedding, det_score)
+        // Pick the largest bbox (face closest to the camera) - works around
+        // photos where a background bystander also got embedded.
+        const primary = faces.reduce((best, f) => {
+          const aBest = (best.bbox[2] - best.bbox[0]) * (best.bbox[3] - best.bbox[1]);
+          const aCur = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]);
+          return aCur > aBest ? f : best;
+        });
+        const insert = await appkit.lakebase.query<{ id: number; created_at: string }>(
+          `INSERT INTO ${APP_SCHEMA}.faces (name, role, image, embedding, det_score)
              VALUES ($1, $2, $3, $4::vector, $5)
              RETURNING id, created_at`,
-            [name, role, thumbnail, _toPgVector(primary.embedding), primary.det_score],
-          );
-          res.json({ id: insert.rows[0]?.id, name, role, created_at: insert.rows[0]?.created_at });
-        } catch (err) {
-          if (sendEndpointError(res, err)) return;
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Face enrollment failed: ${message}` });
-        }
-      });
+          [body.name, body.role, inlineBlob(body.image), _toPgVector(primary.embedding), primary.det_score],
+        );
+        return {
+          id: insert.rows[0]?.id,
+          name: body.name,
+          role: body.role,
+          created_at: insert.rows[0]?.created_at,
+        };
+      }));
 
       // GET /api/faces  -> list of enrolled faces (no embeddings - the
       // raw 512-float vector is just noise for the UI).
-      app.get("/api/faces", async (_req, res) => {
-        try {
-          await _ensureFacesTables();
-          const result = await appkit.lakebase.query<{
-            id: number; name: string; role: string; image: string | null;
-            det_score: number | null; created_at: string;
-          }>(
-            `SELECT id, name, role, image, det_score, created_at FROM ${APP_SCHEMA}.faces ORDER BY created_at DESC`,
-          );
-          res.json({ faces: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
-      });
+      type EnrolledFaceRow = {
+        id: number; name: string; role: string; image: string | null;
+        det_score: number | null; created_at: string;
+      };
+      app.get("/api/faces", asyncRoute({}, async () => {
+        await _ensureFacesTables();
+        const r = await appkit.lakebase.query<EnrolledFaceRow>(
+          `SELECT id, name, role, image, det_score, created_at
+             FROM ${APP_SCHEMA}.faces ORDER BY created_at DESC`,
+        );
+        return { faces: r.rows };
+      }));
 
-      // DELETE /api/faces/:id
-      app.delete("/api/faces/:id", async (req, res) => {
-        const id = Number(req.params.id);
-        if (!Number.isFinite(id) || id <= 0) {
-          res.status(400).json({ error: "Invalid id." });
-          return;
-        }
-        try {
-          await _ensureFacesTables();
-          const result = await appkit.lakebase.query(
-            `DELETE FROM ${APP_SCHEMA}.faces WHERE id = $1`,
-            [id],
-          );
-          res.json({ deleted: result.rowCount ?? 0 });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase delete failed: ${message}` });
-        }
+      const FaceIdParam = z.object({
+        id: z.coerce.number().int().positive(),
       });
+      app.delete("/api/faces/:id", asyncRoute(
+        { params: FaceIdParam },
+        async ({ params }) => {
+          await _ensureFacesTables();
+          const r = await appkit.lakebase.query(
+            `DELETE FROM ${APP_SCHEMA}.faces WHERE id = $1`,
+            [params.id],
+          );
+          return { deleted: r.rowCount ?? 0 };
+        },
+      ));
 
       // POST /api/face-match
       //   Body: { image (b64), source_id?, min_similarity? (default 0.45),
@@ -1715,96 +1581,87 @@ const AppKit = await createApp({
       // session. A second replica would just dedupe independently.
       const _faceMatchLastTs = new Map<number, number>();
 
-      app.post("/api/face-match", async (req, res) => {
-        const body = req.body as {
-          image?: unknown; source_id?: unknown; min_similarity?: unknown; persist?: unknown;
-        } | undefined;
-        const image = typeof body?.image === "string" ? body.image : "";
-        const source_id = typeof body?.source_id === "string" ? body.source_id : "webcam";
-        const persist = body?.persist !== false;
-        const min_similarity = typeof body?.min_similarity === "number"
-          ? body.min_similarity : FACE_MATCH_DEFAULT_THRESHOLD;
-        if (!image) {
-          res.status(400).json({ error: "Body needs `image` (b64)." });
-          return;
-        }
+      const FaceMatchBody = z.object({
+        image: z.string().min(1),
+        source_id: z.string().default("webcam"),
+        min_similarity: z.number().default(FACE_MATCH_DEFAULT_THRESHOLD),
+        persist: z.boolean().default(true),
+      });
 
-        let faces: FaceFromEndpoint[] = [];
-        try {
-          faces = await _embedFaces(image);
-        } catch (err) {
-          if (sendEndpointError(res, err)) return;
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(502).json({ error: `Face endpoint failed: ${message}` });
-          return;
-        }
+      type FaceMatchResult = {
+        face_id: number; name: string; role: string;
+        similarity: number; image: string | null;
+      };
 
+      app.post("/api/face-match", asyncRoute({ body: FaceMatchBody }, async ({ body }) => {
+        const faces = await _embedFaces(body.image);
+
+        // Table-init failures are tolerated here: the model already gave
+        // us faces, so render bboxes-without-matches instead of 5xx-ing
+        // the live tick. (In prod the SP owns the tables and this never
+        // trips; in local dev OBO users can run DDL the SP already did.)
+        let tableInitOk = true;
+        let warning: string | undefined;
         try {
           await _ensureFacesTables();
         } catch (err) {
-          // Don't fail the whole request if table-init fails (the model
-          // already returned faces); just skip match + persist.
-          const message = err instanceof Error ? err.message : String(err);
-          res.json({ faces: faces.map((f) => ({ bbox: f.bbox, det_score: f.det_score, match: null })), warning: message });
-          return;
+          tableInitOk = false;
+          warning = err instanceof Error ? err.message : String(err);
         }
 
-        // For each detected face, run a single pgvector cosine match.
-        // We could batch with a UNION but the per-frame face count is
-        // small (1-4) so the round-trip cost is negligible.
         const out: Array<{
           bbox: [number, number, number, number];
           det_score: number;
-          match: { face_id: number; name: string; role: string; similarity: number; image: string | null } | null;
+          match: FaceMatchResult | null;
         }> = [];
 
         for (const face of faces) {
-          let match: { face_id: number; name: string; role: string; similarity: number; image: string | null } | null = null;
-          try {
-            // 1 - cosine_distance = cosine_similarity. With L2-normalized
-            // ArcFace embeddings this is just the dot product, but using
-            // the `<=>` operator + HNSW index keeps performance constant
-            // as the enrolled set grows.
-            const r = await appkit.lakebase.query<{
-              id: number; name: string; role: string; image: string | null; similarity: number;
-            }>(
-              `SELECT id, name, role, image,
-                      1 - (embedding <=> $1::vector) AS similarity
-               FROM ${APP_SCHEMA}.faces
-               ORDER BY embedding <=> $1::vector
-               LIMIT 1`,
-              [_toPgVector(face.embedding)],
-            );
-            const row = r.rows[0];
-            if (row && row.similarity >= min_similarity) {
-              match = {
-                face_id: row.id, name: row.name, role: row.role,
-                similarity: row.similarity, image: row.image,
-              };
+          let match: FaceMatchResult | null = null;
+          if (tableInitOk) {
+            try {
+              // 1 - cosine_distance = cosine_similarity. With L2-normalized
+              // ArcFace embeddings this is just the dot product, but using
+              // the `<=>` operator + HNSW index keeps performance constant
+              // as the enrolled set grows.
+              const r = await appkit.lakebase.query<{
+                id: number; name: string; role: string;
+                image: string | null; similarity: number;
+              }>(
+                `SELECT id, name, role, image,
+                        1 - (embedding <=> $1::vector) AS similarity
+                   FROM ${APP_SCHEMA}.faces
+                   ORDER BY embedding <=> $1::vector
+                   LIMIT 1`,
+                [_toPgVector(face.embedding)],
+              );
+              const row = r.rows[0];
+              if (row && row.similarity >= body.min_similarity) {
+                match = {
+                  face_id: row.id, name: row.name, role: row.role,
+                  similarity: row.similarity, image: row.image,
+                };
+              }
+            } catch (err) {
+              // Per-face DB error - the bbox still renders.
+              console.warn("face match query failed:", err);
             }
-          } catch (err) {
-            // Don't surface DB errors per-face; the bbox still renders.
-            console.warn("face match query failed:", err);
           }
           out.push({ bbox: face.bbox, det_score: face.det_score, match });
 
-          if (match && persist) {
+          if (match && body.persist) {
             const last = _faceMatchLastTs.get(match.face_id) ?? 0;
             const now = Date.now();
             if (now - last >= FACE_MATCH_DEDUP_MS) {
               _faceMatchLastTs.set(match.face_id, now);
               try {
-                // Cap the frame snapshot stored with the match row -
-                // 750KB matches the plate image cap.
-                const frame_image = image.length <= 750_000 ? image : null;
                 await appkit.lakebase.query(
                   `INSERT INTO ${APP_SCHEMA}.face_matches
                      (source_id, face_id, name, role, similarity,
                       bbox_x1, bbox_y1, bbox_x2, bbox_y2, frame_image)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
                   [
-                    source_id, match.face_id, match.name, match.role, match.similarity,
-                    face.bbox[0], face.bbox[1], face.bbox[2], face.bbox[3], frame_image,
+                    body.source_id, match.face_id, match.name, match.role, match.similarity,
+                    face.bbox[0], face.bbox[1], face.bbox[2], face.bbox[3], inlineBlob(body.image),
                   ],
                 );
               } catch (err) {
@@ -1814,8 +1671,8 @@ const AppKit = await createApp({
           }
         }
 
-        res.json({ faces: out });
-      });
+        return warning ? { faces: out, warning } : { faces: out };
+      }));
 
       // GET /api/face-matches/recent?limit=50[&before_ts=<iso>&before_id=<n>]
       //
@@ -1824,18 +1681,30 @@ const AppKit = await createApp({
       // next older page. Without those params, returns the most recent
       // `limit` rows. The composite tuple comparison `(ts, id) < ($ts, $id)`
       // is stable across timestamp ties because BIGSERIAL `id` is unique.
-      app.get("/api/face-matches/recent", async (req, res) => {
-        const limitRaw = Number(req.query.limit ?? 50);
-        const limit = Number.isFinite(limitRaw) ? Math.min(200, Math.max(1, Math.floor(limitRaw))) : 50;
-        const beforeTs = typeof req.query.before_ts === "string" ? req.query.before_ts : null;
-        const beforeIdRaw = req.query.before_id;
-        const beforeId =
-          typeof beforeIdRaw === "string" && beforeIdRaw.length > 0 && Number.isFinite(Number(beforeIdRaw))
-            ? Math.floor(Number(beforeIdRaw))
-            : null;
-        const useCursor = beforeTs !== null && beforeId !== null;
-        try {
+      // Cursor pair must be specified together. `transform`s give a stable
+      // shape downstream: ints for the id, ISO string for the ts, both
+      // optional but tied to each other.
+      const FaceMatchesRecentQuery = z.object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        before_ts: z.string().min(1).optional(),
+        before_id: z.coerce.number().int().optional(),
+      }).refine(
+        (q) => (q.before_ts == null) === (q.before_id == null),
+        { message: "before_ts and before_id must be provided together" },
+      );
+
+      type FaceMatchRow = {
+        id: number; ts: string; source_id: string; face_id: number | null;
+        name: string; role: string; similarity: number;
+        bbox_x1: number; bbox_y1: number; bbox_x2: number; bbox_y2: number;
+        frame_image: string | null; enrolled_image: string | null;
+      };
+
+      app.get("/api/face-matches/recent", asyncRoute(
+        { query: FaceMatchesRecentQuery },
+        async ({ query }) => {
           await _ensureFacesTables();
+          const useCursor = query.before_ts != null && query.before_id != null;
           const baseSelect = `SELECT m.id, m.ts, m.source_id, m.face_id, m.name, m.role, m.similarity,
                     m.bbox_x1, m.bbox_y1, m.bbox_x2, m.bbox_y2, m.frame_image,
                     f.image AS enrolled_image
@@ -1847,19 +1716,13 @@ const AppKit = await createApp({
                ORDER BY m.ts DESC, m.id DESC LIMIT $1`
             : `${baseSelect}
                ORDER BY m.ts DESC, m.id DESC LIMIT $1`;
-          const params: Array<string | number> = useCursor ? [limit, beforeTs, beforeId] : [limit];
-          const r = await appkit.lakebase.query<{
-            id: number; ts: string; source_id: string; face_id: number | null;
-            name: string; role: string; similarity: number;
-            bbox_x1: number; bbox_y1: number; bbox_x2: number; bbox_y2: number;
-            frame_image: string | null; enrolled_image: string | null;
-          }>(sql, params);
-          res.json({ rows: r.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
-      });
+          const params: Array<string | number> = useCursor
+            ? [query.limit, query.before_ts!, query.before_id!]
+            : [query.limit];
+          const r = await appkit.lakebase.query<FaceMatchRow>(sql, params);
+          return { rows: r.rows };
+        },
+      ));
 
       // GET /api/face-matches/stream  -> SSE of new face_matches rows.
       // Mirrors /api/detections/stream so the Facial Recognition page can
@@ -1928,36 +1791,43 @@ const AppKit = await createApp({
         });
       });
 
-      app.get("/api/guest-counts/recent", async (req, res) => {
-        const windowSecRaw = Number(req.query.windowSec ?? 600);
-        const windowSec = Number.isFinite(windowSecRaw) ? Math.min(86_400, Math.max(60, Math.floor(windowSecRaw))) : 600;
-        const bucketSecRaw = Number(req.query.bucketSec ?? 30);
-        const bucketSec = Number.isFinite(bucketSecRaw) ? Math.min(3_600, Math.max(5, Math.floor(bucketSecRaw))) : 30;
-        // Bucket by truncating timestamps into floor(ts / bucketSec) windows
-        // and average the per-zone counts inside each bucket - averaging
-        // (vs summing) keeps the y-axis meaning "people seen" instead of
-        // "samples taken" so the chart stays interpretable when the client
-        // posts at variable cadence.
-        const stmt = `
-          SELECT
-            zone,
-            to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
-            ROUND(AVG(person_count)::numeric, 2)::float AS avg_count,
-            MAX(person_count) AS max_count
-          FROM ${APP_SCHEMA}.guest_counts
-          WHERE ts >= NOW() - ($2 || ' seconds')::interval
-          GROUP BY zone, bucket_ts
-          ORDER BY bucket_ts ASC, zone ASC
-        `;
-        try {
-          await _ensureGuestCountsTable();
-          const result = await appkit.lakebase.query<{ zone: string; bucket_ts: string; avg_count: number; max_count: number }>(stmt, [bucketSec, String(windowSec)]);
-          res.json({ windowSec, bucketSec, rows: result.rows });
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          res.status(500).json({ error: `Lakebase query failed: ${message}` });
-        }
+      // Same window/bucket schema shape as /api/fog-observations/recent.
+      const BucketWindowQuery = z.object({
+        windowSec: z.coerce.number().int().min(60).max(86_400).default(600),
+        bucketSec: z.coerce.number().int().min(5).max(3_600).default(30),
       });
+      type GuestBucketRow = {
+        zone: string; bucket_ts: string;
+        avg_count: number; max_count: number;
+      };
+      app.get("/api/guest-counts/recent", asyncRoute(
+        { query: BucketWindowQuery },
+        async ({ query }) => {
+          await _ensureGuestCountsTable();
+          // Bucket by truncating timestamps into floor(ts / bucketSec)
+          // windows and average per-zone counts inside each bucket.
+          // Averaging (vs summing) keeps the y-axis meaning "people
+          // seen" instead of "samples taken" so the chart stays
+          // interpretable when the client posts at variable cadence.
+          const r = await appkit.lakebase.query<GuestBucketRow>(`
+            SELECT
+              zone,
+              to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
+              ROUND(AVG(person_count)::numeric, 2)::float AS avg_count,
+              MAX(person_count) AS max_count
+            FROM ${APP_SCHEMA}.guest_counts
+            WHERE ts >= NOW() - ($2 || ' seconds')::interval
+            GROUP BY zone, bucket_ts
+            ORDER BY bucket_ts ASC, zone ASC
+          `, [query.bucketSec, String(query.windowSec)]);
+          return { windowSec: query.windowSec, bucketSec: query.bucketSec, rows: r.rows };
+        },
+      ));
+
+      // Centralized error middleware. Routes can throw - HttpError /
+      // ZodError / EndpointNotDeployedError are turned into the right
+      // status here so handlers don't have to.
+      app.use(errorMiddleware);
     });
   },
 });
