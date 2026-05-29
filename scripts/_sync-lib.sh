@@ -84,6 +84,14 @@ print(d.get("variables", {}).get("schema", {}).get("value", ""))
 #
 # `databricks sync` is incremental by default - unchanged files are not
 # re-uploaded, which is the whole reason these scripts call into it.
+#
+# After the sync, run a verification pass: list remote sizes and diff
+# against local, then re-upload any size mismatches via `databricks fs cp
+# --overwrite`. This catches `databricks sync`'s known bug where it
+# records a file as synced in the snapshot before the upload actually
+# completes - once in the snapshot, subsequent incremental runs skip the
+# file forever (until local mtime changes). The repair pass costs one
+# extra `fs ls` round trip per call but is essential for correctness.
 sync_run() {
   local src="$1"; shift
   local dst="$1"; shift
@@ -92,4 +100,47 @@ sync_run() {
 
   _log "target=${TARGET_NAME:-?} profile=${PROFILE:-<default>} -> dbfs:$dst"
   databricks sync ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} "$@" "$src" "$dst"
+
+  sync_repair "$src" "$dst"
+}
+
+# Verify every file in SRC_DIR matches its remote size at DST_VOLUME_PATH,
+# re-uploading any that don't. Called automatically by `sync_run`; safe
+# to call directly if you ever want to re-verify without doing a full
+# sync. Skips dotfiles + the .databricks state dir.
+sync_repair() {
+  local src="$1"; shift
+  local dst="$1"; shift
+
+  local remote
+  if ! remote="$(databricks fs ls ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} --long "dbfs:${dst}" 2>/dev/null)"; then
+    _log "verify: skipped (could not list ${dst})"
+    return 0
+  fi
+
+  local repaired=0 checked=0 missing=0
+  local entry name local_size remote_size
+  while IFS= read -r -d '' entry; do
+    name="$(basename "$entry")"
+    [[ "$name" == .* ]] && continue
+    checked=$((checked + 1))
+    local_size="$(stat -f%z "$entry" 2>/dev/null || stat -c%s "$entry")"
+    remote_size="$(printf '%s\n' "$remote" | awk -v f="$name" '$NF == f {print $2; exit}')"
+    if [[ -z "$remote_size" ]]; then
+      _log "verify: re-uploading $name (missing on volume, local=${local_size})"
+      missing=$((missing + 1))
+      databricks fs cp ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} --overwrite "$entry" "dbfs:${dst}/${name}" >/dev/null
+      repaired=$((repaired + 1))
+    elif [[ "$local_size" != "$remote_size" ]]; then
+      _log "verify: re-uploading $name (size mismatch local=${local_size} remote=${remote_size})"
+      databricks fs cp ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} --overwrite "$entry" "dbfs:${dst}/${name}" >/dev/null
+      repaired=$((repaired + 1))
+    fi
+  done < <(find "$src" -maxdepth 1 -type f -print0)
+
+  if (( repaired > 0 )); then
+    _log "verify: ${checked} checked, ${repaired} repaired (${missing} missing)."
+  else
+    _log "verify: ${checked} checked, all in sync."
+  fi
 }
