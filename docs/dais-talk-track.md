@@ -91,7 +91,7 @@ Why this matters before the walkthrough:
 
 ## Section 3 - SHOW: walk the app
 
-Five stops, each is its own purpose-built model on its own serving endpoint.
+Nine stops, each is its own purpose-built model on its own serving endpoint.
 Total time on this section: about five minutes. The point is that the
 audience sees footage become a row, a row become an alert, and an alert
 become a dollar figure - in seconds. Pick the two or three stops that fit
@@ -185,7 +185,52 @@ What to say:
 > camera *before* downstream models silently miss things. Sustained fog
 > opens a cleaning ticket. The same governance, same Lakebase row stream."
 
-### Stop 6: Live activity from the lake (`/detections` or `/alerts`)
+### Stop 6: Facial Recognition (`/facial-recognition`)
+
+What to do:
+1. Click **Facial Recognition** in the sidebar.
+2. Enroll a face right there at the booth: snap or upload a photo of
+   yourself, pick a role (banned / VIP / staff), hit **Enroll face**.
+3. Step in front of the webcam. The bbox flips from grey "Unknown" to a
+   coloured pill with your name and a similarity percentage in under a
+   second.
+4. Switch the role to **banned** for the next enrollment and walk back
+   in - the badge blinks red and a toast fires.
+5. Scroll the **Recent matches** card. Each row has both the live frame
+   *and* the enrolled reference photo, plus role colour, similarity %,
+   and a relative timestamp.
+
+What to say:
+> "Two models on one frame and one SQL query in between. **InsightFace
+> SCRFD** finds every face in the webcam frame; **ArcFace** turns each
+> one into a 512-dimensional embedding. That embedding goes into
+> **Lakebase Postgres**, which we're using as the vector database -
+> `pgvector` does the cosine search against everyone we've enrolled, in
+> the same database the rest of the app already writes to. There's no
+> separate vector store to operate."
+
+> "The roles are what turn this into a business app. **Banned** subjects
+> blink the badge red and send a toast - that's loss prevention. **VIP**
+> goes gold - that's the host or concierge being told who just walked
+> in. **Staff** goes blue - that's on-duty check, or after-hours
+> intrusion if the same camera fires at 2am. Same model, three
+> conversations."
+
+Why this matters to the buyer:
+- **Lakebase is the operator database AND the vector index.** Same
+  Postgres connection, same governance, no extra system to procure or
+  patch. Enrolled faces, match history, and the live tap-to-acknowledge
+  are all in one place.
+- **The customer's own model, the customer's own data.** The enrolled
+  set never leaves their workspace. The endpoint runs in their account.
+  No images shipped to a third-party SaaS, which is the answer to the
+  privacy question before it gets asked.
+- **The pipeline is identical to every other detector.** Frame -> serving
+  endpoint -> Lakebase row -> Genie can ask about it. Pull this one out
+  for **retail loss prevention**, **hospitality VIP recognition**, and
+  **secure-area staff verification** depending on the badge.
+
+### Stop 7: Live activity from the lake (`/detections` or `/alerts`)
 
 What to do:
 1. Click **Detections** (or **Alerts**).
@@ -213,7 +258,7 @@ Why this matters to the buyer:
 - Audit, retention, redaction, and PII rules they already wrote for the
   rest of the business apply to footage too.
 
-### Stop 7: Composability (`/trends` or `/overview`)
+### Stop 8: Composability (`/trends` or `/overview`)
 
 What to do:
 1. Click **Trends** or **Overview**.
@@ -225,7 +270,7 @@ What to say:
 > English, and the weekly executive report. One source of truth - four
 > interfaces - no duplicated pipelines."
 
-### Stop 8: Talk to the data with Genie
+### Stop 9: Talk to the data with Genie
 
 What to do:
 1. Open the Genie panel (or the AI chat button in the corner).
@@ -427,6 +472,72 @@ The talk track for these is identical to spill: it's a model on its own
 endpoint, every detection lands in Delta and Lakebase, Genie can ask
 questions in English. The customer gets a model, not a stack.
 
+### 4.6 - Facial recognition (`/facial-recognition`)
+
+What the model sees:
+- **InsightFace `buffalo_l`** runs as a single serving endpoint that
+  bundles **SCRFD-10G** (face detection) and **ArcFace `w600k_r50`**
+  (512-dimensional, L2-normalised identity embedding). One request per
+  frame returns every visible face with its bbox, detection score, and
+  embedding.
+- The whole model pack (~280 MB) is shipped *inside* the MLflow
+  artifact and staged into `INSIGHTFACE_HOME` at scale-from-zero, so
+  there's no cold-start CDN call - the endpoint has zero external
+  network dependencies once it's warm.
+- The app server takes each embedding and runs a **`pgvector` cosine
+  search** against the `faces` table in Lakebase to find the closest
+  enrolled identity, if any is above threshold.
+
+What the operator gets:
+- A simple enroll card on the left: name + role (banned / VIP / staff)
+  + photo. The server crops the largest face, embeds it, and writes the
+  thumbnail + embedding to Lakebase in one round trip.
+- A live webcam panel with role-coloured bounding boxes: red for
+  banned, gold for VIP, blue for staff, slate for unknown faces. Matched
+  faces get a name + similarity %; unknown faces stay anonymous.
+- A **Recent matches** stream backed by Lakebase, deduped per face for
+  30 seconds so the list reads like signal, not telemetry. Each row
+  pairs the **live frame** with the **enrolled reference** so the
+  operator can sanity-check a match in one glance.
+- A toast plus a blinking badge whenever a **banned** subject is
+  matched - the loss-prevention escalation path is on-screen, not in a
+  separate alerting tool.
+
+Business value, in the customer's words:
+- **Loss prevention without an external biometrics vendor.** A
+  previously-trespassed shopper walks in, the store manager's tablet
+  flashes red within a second. The enrolled set, the match history, and
+  the audit trail all live in the customer's own Unity Catalog + their
+  own Lakebase database. Faces never leave the workspace.
+- **VIP and concierge recognition** for hospitality, casinos, private
+  clubs, and high-end retail. The right person greets the right guest
+  at the door, not at checkout. The matched row is the join key for
+  whatever loyalty system is downstream.
+- **Staff verification and after-hours intrusion** in the same model.
+  The on-duty shift roster is enrolled as "staff"; an unfamiliar face
+  in a back-of-house camera at 2am is the same `face_matches` row with
+  a role of `unknown`. One model, three operational doctrines.
+- **One Postgres for everything operational.** Lakebase is already the
+  app's read/write database; `pgvector` makes it the vector index too.
+  No separate Pinecone / Weaviate / Milvus bill, no second governance
+  surface, no second on-call rotation. The vector search runs over the
+  same OAuth-authenticated connection the rest of the app uses.
+
+Why this lands with the platform team:
+- The endpoint is **self-contained** - the model pack travels in the
+  MLflow artifact, validated with onnxruntime at log time, so there's
+  no "model zoo downloaded a 503" failure mode at cold start.
+- Inference is **CPU-only** (`CPUExecutionProvider`, `Small` workload).
+  Operators can run it cheaply on every store, not just flagship sites.
+- The whole pipeline is **boundaried by Unity Catalog**: enrolled
+  thumbnails, embeddings, and match history are tables the privacy
+  team can apply column masks, row-level security, and retention to
+  exactly like any other PII column.
+
+Where this lands hardest: **retail loss prevention, hotels and
+hospitality, casinos and gaming, stadiums and venues, secure
+back-of-house in QSR / manufacturing / fuel.**
+
 ---
 
 ## Section 5 - TELL: the unlock is zerobus, Delta, and Lakebase
@@ -487,6 +598,9 @@ unlocks each outcome.
   evidence to back it.
 - **PPE and food-safety compliance** as a weekly coaching trend, not a
   punitive write-up (Section 4.5).
+- **Banned-subject and shift-roster verification** in the lobby and
+  back-of-house (Section 4.6). Trespass enforcement and on-duty staff
+  check, same endpoint, same database as the rest of the operator app.
 
 ### Convenience and fuel
 
@@ -502,6 +616,10 @@ unlocks each outcome.
 - **Camera health on the canopy and freezer aisle** (Section 4.4). The
   freezer dome cam that fogs over every winter is the same camera your
   LP team relies on. Catch it before the model misses a theft.
+- **Banned-shopper alerting** at the door of the c-store
+  (Section 4.6). A previously-trespassed subject walks in, the manager's
+  tablet flashes red, the incident is one row in Lakebase with the live
+  frame attached.
 
 ### Travel, hospitality, and stadiums
 
@@ -510,7 +628,9 @@ unlocks each outcome.
 - **Asset and incident detection** in lobbies, lots, and back-of-house -
   unattended bags, slips (Section 4.5), smoke, after-hours presence.
 - **Loyalty and VIP detection** at the front door, not at the POS
-  (Section 4.2).
+  (Section 4.2 for plates, Section 4.6 for faces). Plate at the
+  porte-cochere, face at the lobby, same row stream the front-desk
+  concierge or casino host is watching.
 
 ### Stadium, venues, and live events
 
@@ -519,6 +639,9 @@ unlocks each outcome.
 - **Crowd density and egress** monitoring with alerts to operations.
 - **Lost-and-found and incident response** with timestamped, queryable
   footage instead of a binder.
+- **Banned-subject enforcement at the gate** (Section 4.6) for venues
+  with a no-trespass list. The match fires before the subject reaches
+  the turnstile.
 
 A single sentence to anchor any of these:
 
@@ -587,6 +710,20 @@ keep raw frames behind Unity Catalog row-level security. Every read is in
 the audit log. The privacy team writes the policy once, in the place they
 already write it.
 
+**"How does the face recognition stay compliant - BIPA, GDPR, the rest?"**
+Three concrete things. First, **the enrolled set is the customer's own
+table.** Nothing leaves their workspace; there's no third-party face
+database. Second, the embeddings themselves are stored as `pgvector`
+columns in Lakebase under the same Unity Catalog policy the customer
+already enforces on PII - row-level security, column masks, retention,
+audit, the works. Third, **consent and right-to-erasure are one DELETE**
+against the `faces` row, which cascades through the `face_matches`
+history. The model serving endpoint runs inside the customer's account
+on `CPUExecutionProvider`, with no outbound network calls at inference
+time. That's the answer for BIPA in Illinois, GDPR Article 9 in the EU,
+and the equivalent biometrics statutes in the rest of the world - the
+customer owns every leg of the data path.
+
 **"What happens if a model is wrong?"**
 You see the detection in the same row stream the operator does, with the
 frame attached. Wrong detections are a labelled-data set, not a support
@@ -643,17 +780,18 @@ is the operator path, Zerobus is the on-ramp.
 
 ### Model endpoints in the bundle
 
-| Demo page         | Model id          | Serving endpoint       | What it does                                                  |
-| ----------------- | ----------------- | ---------------------- | ------------------------------------------------------------- |
-| Live              | `yolo`            | `lensiq-detector`      | General-purpose YOLOv8: people, vehicles, products            |
-| Spills            | `spill`           | `lensiq-spill`         | Liquid on the floor                                           |
-| Spills            | `wet_floor_sign`  | `lensiq-wet-floor-sign`| Yellow caution cone deployment                                |
-| Plates            | `license_plate`   | `lensiq-license-plate` | Plate detection (paired with Claude vision OCR)               |
-| Guests            | `yolo`            | `lensiq-detector`      | Person + vehicle tracking, two feeds in parallel              |
-| Camera Clarity    | `fog_detector`    | `lensiq-fog-detector`  | Pillow + numpy lens-condition diagnostic, no GPU              |
-| Live (specialty)  | `slip_fall`       | `lensiq-slip-fall`     | Standing vs fallen person                                     |
-| Live (specialty)  | `hard_hat`        | (on-demand)            | PPE compliance                                                |
-| Live (specialty)  | `cigarette_vape`  | `lensiq-cigarette-vape`| Age-gated area loss-prevention                                |
+| Demo page          | Model id           | Serving endpoint           | What it does                                                  |
+| ------------------ | ------------------ | -------------------------- | ------------------------------------------------------------- |
+| Live               | `yolo`             | `lensiq-detector`          | General-purpose YOLOv8: people, vehicles, products            |
+| Spills             | `spill`            | `lensiq-spill`             | Liquid on the floor                                           |
+| Spills             | `wet_floor_sign`   | `lensiq-wet-floor-sign`    | Yellow caution cone deployment                                |
+| Plates             | `license_plate`    | `lensiq-license-plate`     | Plate detection (paired with Claude vision OCR)               |
+| Guests             | `yolo`             | `lensiq-detector`          | Person + vehicle tracking, two feeds in parallel              |
+| Camera Clarity     | `fog_detector`     | `lensiq-fog-detector`      | Pillow + numpy lens-condition diagnostic, no GPU              |
+| Facial Recognition | `face_recognition` | `lensiq-face-recognition`  | InsightFace `buffalo_l` (SCRFD + ArcFace 512-d) + pgvector match in Lakebase |
+| Live (specialty)   | `slip_fall`        | `lensiq-slip-fall`         | Standing vs fallen person                                     |
+| Live (specialty)   | `hard_hat`         | (on-demand)                | PPE compliance                                                |
+| Live (specialty)   | `cigarette_vape`   | `lensiq-cigarette-vape`    | Age-gated area loss-prevention                                |
 
 Each endpoint is independently versioned, owned, and billed. Adding a new
 use case is one notebook (`notebooks/deploy_*.ipynb`) plus one row in
@@ -672,11 +810,18 @@ use case is one notebook (`notebooks/deploy_*.ipynb`) plus one row in
 - **5-minute version.** Section 1 (one minute), the architecture
   diagram (Section 2, 30 seconds), Spill Detection (Section 3 stop 2),
   Camera Clarity (Section 3 stop 5) to land the "platform of
-  platforms" pitch, then Genie (Section 3 stop 8) and the close.
+  platforms" pitch, then Genie (Section 3 stop 9) and the close.
   Skip everything else.
 - **3-minute version.** Section 1 in 30 seconds, the architecture
   diagram (Section 2, 20 seconds), Spill Detection (Section 3 stop 2),
-  Genie (Section 3 stop 8), close.
+  Genie (Section 3 stop 9), close.
+- **The LP-heavy version.** Spill Detection (Section 3 stop 2) for
+  the carrier story, then Facial Recognition (Section 3 stop 6) for
+  the banned-shopper / VIP / staff trio - it's the booth's most
+  visceral live demo because the badge blinks red the moment a
+  banned face walks in. Close on Genie (Section 3 stop 9) so the LP
+  director sees they can ask "who's our most-repeat trespasser this
+  month" in plain English.
 - **Don't open the IDE.** This is a business demo, not a code review. The
   appendix and the deeper architecture are for the SA standing behind you.
 - **No customer logos.** This demo is generic so it can be reused.
