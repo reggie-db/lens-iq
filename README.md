@@ -162,6 +162,11 @@ attach to `npm run dev`.
 
 ## Deploying
 
+### Subsequent deploys
+
+Once the workspace has been bootstrapped once (see the next subsection),
+every redeploy is one command:
+
 ```bash
 scripts/deploy.sh              # → dev target (default)
 scripts/deploy.sh --skip-sync  # skip volume re-sync (sample videos, presenter content)
@@ -184,6 +189,100 @@ scripts/deploy.sh --skip-run   # bundle deploy only, don't start the app
 5. `databricks bundle run lens_iq` (starts the app).
 
 Per repo policy, no command pushes to the workspace unless you run it.
+
+### Fresh environment (first deploy)
+
+These are the exact commands to stand the app up from scratch in a
+workspace it has never been deployed to. Each step is idempotent so you
+can re-run any of them safely.
+
+#### 0. Workspace prerequisites (manual, one time)
+
+These exist outside the bundle and must be in place before
+`bundle deploy`:
+
+- A SQL Warehouse you can use. Note its ID.
+- A Lakebase Autoscaling project + branch. The bundle binds
+  `projects/lens-iq/branches/production/databases/<lakebase_database>`
+  by default; either match that path or override `lakebase_database` /
+  edit `resources/app.yml::postgres` to point at your project.
+- A Claude foundation-model serving endpoint reachable by the SP.
+- (Optional) A Databricks secret holding your Roboflow API key, if you
+  plan to deploy the Roboflow-backed detectors (license plate, slip &
+  fall, cigarette/vape). Default scope/key is
+  `reggie_pierce` / `ROBOFLOW_API_KEY`.
+- (Optional) A Databricks secret holding a portr client token, if you
+  want the public tunnel. See **Public tunnel (opt-in)** below.
+
+Either edit the defaults in `databricks.yml::variables` or override per
+command with `--var "name=value"`. The vars that almost always need
+overriding for a non-reggie workspace are `catalog`, `warehouse_id`,
+and `lakebase_database`.
+
+#### 1. Install + auth
+
+```bash
+git clone <repo>
+cd dais-demos
+npm install
+
+# CLI auth - log in to the target workspace. The bundle resolves the
+# matching ~/.databrickscfg profile from the host pinned in
+# databricks.yml::targets.dev.workspace.host, so the profile name
+# doesn't matter.
+databricks auth login --host https://<your-workspace>.azuredatabricks.net
+```
+
+#### 2. Bundle deploy (creates catalog, schema, volumes, jobs, the app shell)
+
+```bash
+databricks bundle validate -t dev
+databricks bundle deploy   -t dev \
+  --var "catalog=<your_catalog>,warehouse_id=<id>,lakebase_database=<db_id>"
+```
+
+After this returns, the UC catalog/schema/volumes and the bundle's
+jobs exist; the app itself is created but not yet running (no serving
+endpoints to talk to, no synthetic data, no app source uploaded).
+
+#### 3. Seed synthetic tables
+
+```bash
+databricks bundle run pizza_vision_seed -t dev
+```
+
+Populates `<catalog>.lensiq.*` with the synthetic data the Fleet
+Dashboard, Inventory, Trends, Devices, Alerts, Search and Detections
+pages query.
+
+#### 4. Deploy the per-detector serving endpoints (~3-5 min each, cold start)
+
+```bash
+databricks bundle run pizza_vision_deploy_yolo         -t dev
+databricks bundle run lensiq_deploy_roboflow_detectors -t dev
+databricks bundle run lensiq_deploy_fog_detector       -t dev
+databricks bundle run lensiq_deploy_face_recognition   -t dev
+```
+
+The Roboflow job is a fan-out (license plate + cigarette/vape + slip &
+fall in one run). Skip whichever of these you don't need - the pages
+backed by missing endpoints will surface a 503 envelope; everything
+else still works.
+
+#### 5. Upload the volume bytes, grant the Lakebase schema, start the app
+
+```bash
+scripts/deploy.sh -t dev
+```
+
+This runs the same chain documented under **Subsequent deploys**
+above - now that the prerequisites are in place, it pushes the sample
+videos + presenter content into their volumes, opens the Lakebase
+schema to PUBLIC, and starts the app.
+
+When it returns, the app is reachable at its Databricks Apps workspace
+URL. If you've configured the optional public tunnel (next section),
+it's also reachable at `https://<PUBLIC_DOMAIN>`.
 
 ## Public tunnel (opt-in)
 
