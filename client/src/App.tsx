@@ -37,7 +37,7 @@ type Role = "Admin" | "Store Manager";
 const RESTRICTED_VIEWS = ["search", "live", "plates", "detections"];
 
 const VIEW_TITLES: Record<string, string> = {
-  overview: "Dashboard Overview",
+  overview: "Fleet Operations Dashboard",
   devices: "All Devices",
   alerts: "Alerts",
   detections: "Detections",
@@ -96,6 +96,10 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
 
   return (
     <nav className="flex flex-col gap-2">
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Start here</div>
+      <NavButton view="overview"   label="Fleet Dashboard" icon={LayoutDashboard} activeView={activeView} onNavigate={handle} />
+
+      <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Computer Vision</div>
       <NavButton view="live"       label="Live Detection" icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
       <NavButton view="guests"     label="Guest Counts"   icon={Users}          activeView={activeView} onNavigate={handle} />
@@ -109,7 +113,6 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
 
       <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">CV-Driven Insights</div>
-      <NavButton view="overview"   label="Overview"      icon={LayoutDashboard} activeView={activeView} onNavigate={handle} />
       <NavButton view="inventory"  label="Inventory"     icon={Package}         activeView={activeView} onNavigate={handle} />
       <NavButton view="trends"     label="Trends"        icon={TrendingUp}      activeView={activeView} onNavigate={handle} />
 
@@ -155,7 +158,7 @@ export default function App() {
 
 function AppShell() {
   const location = useLocation();
-  const activeView = location.pathname.slice(1) || "live";
+  const activeView = location.pathname.slice(1) || "overview";
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
@@ -252,7 +255,7 @@ function AppShell() {
 
         <main className="flex-1 min-h-0 px-4 md:px-8 py-4 overflow-y-auto overscroll-contain">
           <Routes>
-            <Route path="/" element={<Navigate to="/live" replace />} />
+            <Route path="/" element={<Navigate to="/overview" replace />} />
             <Route path="/overview" element={<OverviewPage />} />
             <Route path="/devices" element={<DevicesPage />} />
             <Route path="/alerts" element={<AlertsPage />} />

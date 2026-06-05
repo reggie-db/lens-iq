@@ -60,11 +60,13 @@ resources:
         #   genie_space:
         #     space_id: ${var.genie_space_id}
         #     permission: CAN_RUN
-        - name: apps_dbx_tools_token
-          # Portr client secret used by scripts/start.sh to register the
-          # lensiq tunnel with https://apps.dbx.tools. The plaintext token is
-          # held in the Databricks secret store and surfaced to the app as
-          # the APPS_DBX_TOOLS_TOKEN env var (see app.yaml).
+        - name: portr_token
+          # Portr client secret used by scripts/start.sh when the public
+          # tunnel is opted in via PUBLIC_DOMAIN (see app.yaml). The
+          # plaintext token is held in the Databricks secret store and
+          # surfaced to the app as the PORTR_TOKEN env var. To disable the
+          # tunnel entirely, drop both this resource binding AND the
+          # PUBLIC_DOMAIN / PORTR_TOKEN entries in app.yaml.
           secret:
             scope: ${var.apps_tunnel_secret_scope}
             key: ${var.apps_tunnel_secret_key}

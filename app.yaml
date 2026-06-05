@@ -4,12 +4,21 @@ command:
 env:
   - name: NODE_ENV
     value: production
-  # Portr client auth token, sourced from the `apps_dbx_tools_token` secret
-  # binding declared in resources/app.yml. scripts/start.sh interpolates this
-  # into ~/.portr/config.yaml at boot so the lensiq tunnel can register with
-  # apps.dbx.tools.
-  - name: APPS_DBX_TOOLS_TOKEN
-    valueFrom: apps_dbx_tools_token
+  # ─── Public tunnel (opt-in) ──────────────────────────────────────────
+  # scripts/start.sh installs portr and registers a tunnel only when
+  # PUBLIC_DOMAIN is set. The leftmost label of PUBLIC_DOMAIN becomes the
+  # portr subdomain; the rest becomes the portr server host. Setting
+  # PUBLIC_DOMAIN=lensiq.apps.dbx.tools points the tunnel at the
+  # apps.dbx.tools portr server with subdomain `lensiq`.
+  #
+  # To opt OUT of the public tunnel: remove (or comment out) BOTH the
+  # PUBLIC_DOMAIN env var below AND the `portr_token` resource binding in
+  # resources/app.yml. With no PUBLIC_DOMAIN, start.sh skips the portr
+  # install entirely and just runs node.
+  - name: PUBLIC_DOMAIN
+    value: lensiq.apps.dbx.tools
+  - name: PORTR_TOKEN
+    valueFrom: portr_token
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares

@@ -9,6 +9,7 @@
     "build": "npm run build:server && npm run build:client",
     "build:server": "tsdown --out-dir build --entry.index server/server.ts",
     "build:client": "tsc -b && vite build --config client/vite.config.ts",
+    "deploy": "scripts/deploy.sh",
     "start": "node build/index.mjs",
     "typecheck": "tsc -b --noEmit"
   },

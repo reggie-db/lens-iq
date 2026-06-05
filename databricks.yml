@@ -125,11 +125,15 @@ variables:
     description: Lakebase Autoscaling database id under projects/lens-iq/branches/production.
     default: db-wb61-xoxc0soijf
 
-  # ─── Apps tunnel token ────────────────────────────────────────────────
-  # Databricks secret holding the portr client token. scripts/start.sh
-  # interpolates the value into ~/.portr/config.yaml at boot.
+  # ─── Public tunnel: portr client token ────────────────────────────────
+  # Databricks secret holding the portr client token used by the optional
+  # public tunnel. scripts/start.sh interpolates the value into
+  # ~/.portr/config.yaml at boot only when PUBLIC_DOMAIN is set in
+  # app.yaml. To disable the tunnel, remove the PUBLIC_DOMAIN env var
+  # and the `portr_token` resource binding (see app.yaml and
+  # resources/app.yml).
   apps_tunnel_secret_scope:
-    description: Secret scope holding the portr (apps.dbx.tools) client token.
+    description: Secret scope holding the portr client token (used when PUBLIC_DOMAIN is set).
     default: reggie_pierce
   apps_tunnel_secret_key:
     description: Secret key for the portr client token under apps_tunnel_secret_scope.
