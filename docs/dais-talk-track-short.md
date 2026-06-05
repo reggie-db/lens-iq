@@ -1,82 +1,79 @@
-# LensIQ Booth Talk Track (Data + AI Summit)
+# LensIQ Demo Talk Track (~3 min)
 
-## Live Detection
+## [0:00 - Overview]
 
-"Most companies already have cameras everywhere, but almost none of that data ends up in their analytics platform.
+"Hi, I'm ___, a ___ at Databricks.
 
-What we're showing here is a live video stream where every frame is being processed by a model and turned into structured data. Different detectors can look for different things: spills, people, vehicles, license plates, camera issues, and so on.
+Imagine I'm a regional operations manager for a convenience store chain with hundreds of locations. Every store already has cameras, but most of that footage is only used after something goes wrong.
 
-The interesting part isn't really the model. It's that the output lands in Databricks alongside everything else the business already tracks."
+My challenge is simple: I need to understand what's happening across my stores in near real time, and I need to turn that information into operational decisions.
 
----
+Let me show you what that looks like."
 
-## Spill Detection
+## [0:20 - Spill Response]
 
-"This is one of the simpler examples.
+[Open Spills]
 
-The model identifies a spill and separately identifies when a caution cone appears. That lets us measure response time automatically.
+"One of our district managers has noticed that slip-and-fall incidents are trending higher in a particular region.
 
-Instead of reviewing footage after an incident, you can start tracking operational metrics directly from video. In this case, we're calculating time from spill detection to mitigation."
+The problem isn't finding footage. The problem is measuring response consistently across hundreds of stores.
 
----
+Here, the system automatically detects the spill and separately detects when a wet floor sign is placed.
 
-## Facial Recognition
+In this example, the spill appears at second one and the cone appears at second twenty-seven.
 
-"This demo usually gets people's attention because it's very visual.
+Now that response time becomes a metric instead of a video review exercise.
 
-We enroll a face, assign a role, and then the system recognizes that person when they reappear.
+Across the fleet we can see average response times, identify stores that consistently lag behind, and coach teams before an incident becomes a claim."
 
-Under the covers we're generating embeddings and matching them against enrolled identities stored in Lakebase with pgvector.
+## [1:00 - Guest Counts]
 
-The point isn't really facial recognition specifically. It's that video can become another searchable dataset inside the platform."
+[Open Guest Counts]
 
----
+"Let's look at another problem.
 
-## Detections / Activity Feed
+Our fuel traffic is growing, but inside sales aren't keeping pace.
 
-"Everything we've done so far is creating rows in Delta tables.
+Historically we'd rely on POS transactions and some educated guesses.
 
-Every detection, timestamp, model version, and associated metadata becomes data that can be governed, queried, and analyzed like any other business dataset.
+Now we're measuring people at the pumps, vehicles on the forecourt, and customers entering the store.
 
-The application is reading from Lakebase for operational responsiveness, but the same information is available in the lake for analytics."
+For the first time we can calculate pump-to-store conversion consistently across every location.
 
----
+A regional manager can immediately see which stores convert traffic effectively and which stores need attention."
 
-## Genie
+## [1:35 - Loss Prevention]
 
-"This is where things start to get interesting.
+[Open Facial Recognition or License Plates]
 
-Once video events become rows in tables, they become something you can ask questions about.
+"Loss prevention teams have a similar challenge.
 
-For example: 'Which stores had the most spills this week?'
+A repeat offender may visit multiple locations, but each incident is usually reviewed in isolation.
 
-The user doesn't need to know where the data came from. To Genie it's just another governed dataset in Unity Catalog."
+Here we can identify known individuals or vehicles as they appear and create a unified operational view across stores.
 
----
+The important part isn't the alert itself.
 
-## Close
+It's that every event becomes governed data that can be analyzed alongside transactions, inventory, staffing, and other business systems."
 
-"The main idea isn't really computer vision.
+## [2:05 - Genie]
 
-It's taking a data source that traditionally lives in a silo and making it part of the rest of the data estate.
+[Switch to Genie]
 
-Once that happens, you can build applications, dashboards, alerts, agents, and analytics on top of it using the same platform you're already using for everything else."
+"Once these events become data, anyone in the business can work with them.
 
-## Tone Notes
+For example, I can ask: 'Which stores had the slowest spill response times this week?'
 
-Avoid:
-- Revenue and risk lever
-- One bundle, one bill
-- Pays for itself
-- Insurance carrier wants in discovery
-- You already pay for Databricks
-- Moat
-- Six month project with three vendors
+Or: 'Which locations have the lowest pump-to-store conversion rates?'
 
-Focus on:
-- Interesting technical architecture
-- How video becomes data
-- Unity Catalog governance
-- Delta + Lakebase integration
-- Real-time operational applications
-- Genie and downstream analytics
+The same events driving the application are available for analysis through Genie without building a separate reporting pipeline."
+
+## [2:45 - Close]
+
+"So the goal here isn't computer vision for its own sake.
+
+It's helping operators make better decisions using a source of information they already have.
+
+The camera becomes another business signal.
+
+And once that signal lands in the lakehouse, it can drive applications, analytics, alerts, and AI experiences on the same platform."
