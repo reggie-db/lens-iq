@@ -51,11 +51,6 @@ export const SERVING_ALIASES: Record<string, ServingAliasConfig> = {
   // there is no dedicated endpoint to probe / surface "not deployed"
   // hints for. Model id -> vision-detector dispatch happens inside
   // /api/detect; everything else is unchanged.
-  cigarette_vape: {
-    envVar: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE",
-    displayName: "Cigarette / vape detector",
-    deployJob: "lensiq_deploy_roboflow_detectors",
-  },
   slip_fall: {
     envVar: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL",
     displayName: "Slip & fall detector",

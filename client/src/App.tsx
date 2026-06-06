@@ -2,7 +2,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-
 import { useEffect, useState } from "react";
 import {
   Activity, Bell, BookOpen, Camera, Car, CloudFog, Cone, Cpu, Database, LayoutDashboard,
-  Menu, Package, PlayCircle, Presentation, ScanFace, TrendingUp, Upload, Users, Video,
+  Menu, Package, Pizza, PlayCircle, Presentation, ScanFace, TrendingUp, Upload, Users, Video,
   Workflow,
 } from "lucide-react";
 import {
@@ -24,6 +24,7 @@ import { GuestsPage } from "./pages/Guests";
 import { SpillsPage } from "./pages/Spills";
 import { CameraHealthPage } from "./pages/CameraHealth";
 import { FacialRecognitionPage } from "./pages/FacialRecognition";
+import { PizzaInventoryPage } from "./pages/PizzaInventory";
 import { InfoPage } from "./pages/Info";
 import { DeckPage } from "./pages/Deck";
 import { AIChatButton } from "./components/AIChatButton";
@@ -44,6 +45,7 @@ const VIEW_TITLES: Record<string, string> = {
   plates: "License Plates",
   search: "Data Search",
   inventory: "Inventory",
+  "pizza-inventory": "Pizza Inventory",
   trends: "Trends",
   live: "Live Stream",
   upload: "Image Upload",
@@ -101,15 +103,16 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
 
       <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Computer Vision</div>
-      <NavButton view="live"       label="Live Detection" icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
-      <NavButton view="guests"     label="Guest Counts"   icon={Users}          activeView={activeView} onNavigate={handle} />
-      <NavButton view="plates"     label="License Plates" icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
-      <NavButton view="spills"     label="Spill Detection" icon={Cone}          activeView={activeView} onNavigate={handle} />
-      <NavButton view="faces"      label="Facial Recognition" icon={ScanFace}   activeView={activeView} onNavigate={handle} />
-      <NavButton view="clarity"    label="Camera Clarity" icon={CloudFog}       activeView={activeView} onNavigate={handle} />
-      <NavButton view="upload"     label="Image Upload"  icon={Upload}          activeView={activeView} onNavigate={handle} />
-      <NavButton view="pipeline"   label="Pipeline"      icon={Workflow}        activeView={activeView} onNavigate={handle} />
-      <NavButton view="detections" label="Detections"    icon={Camera}          activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
+      <NavButton view="live"             label="Live Detection"     icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
+      <NavButton view="guests"           label="Guest Counts"       icon={Users}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="plates"           label="License Plates"     icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
+      <NavButton view="spills"           label="Spill Detection"    icon={Cone}           activeView={activeView} onNavigate={handle} />
+      <NavButton view="faces"            label="Facial Recognition" icon={ScanFace}       activeView={activeView} onNavigate={handle} />
+      <NavButton view="clarity"          label="Camera Clarity"     icon={CloudFog}       activeView={activeView} onNavigate={handle} />
+      <NavButton view="pizza-inventory"  label="Pizza Inventory"    icon={Pizza}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="upload"           label="Image Upload"       icon={Upload}         activeView={activeView} onNavigate={handle} />
+      <NavButton view="pipeline"         label="Pipeline"           icon={Workflow}       activeView={activeView} onNavigate={handle} />
+      <NavButton view="detections"       label="Detections"         icon={Camera}         activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
 
       <div className="my-2 border-t border-slate-200" />
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">CV-Driven Insights</div>
@@ -269,6 +272,7 @@ function AppShell() {
             <Route path="/spills" element={<SpillsPage isActive={activeView === "spills"} />} />
             <Route path="/faces" element={<FacialRecognitionPage isActive={activeView === "faces"} />} />
             <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
+            <Route path="/pizza-inventory" element={<PizzaInventoryPage isActive={activeView === "pizza-inventory"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             <Route path="/info" element={<InfoPage />} />

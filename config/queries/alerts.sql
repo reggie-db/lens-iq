@@ -8,6 +8,6 @@ SELECT
     a.store_name AS storeName,
     DATE_FORMAT(a.ts, "yyyy-MM-dd'T'HH:mm:ss") AS ts,
     a.acknowledged
-FROM reggie_pierce_7405614800873570.pizza_vision.alerts a
+FROM retail_consumer_goods.lens_iq.alerts a
 ORDER BY a.ts DESC
 LIMIT :max_rows

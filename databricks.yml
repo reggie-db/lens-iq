@@ -1,5 +1,10 @@
 bundle:
   name: lens-iq
+  # `engine: direct` is required for the newer DABs resources we lean on -
+  # catalogs, schemas, secret_scopes, postgres_projects, sql_warehouses.
+  # Without it, `bundle deploy` falls back to the Terraform engine, which
+  # doesn't support catalog/schema/postgres resources.
+  engine: direct
 
 # Scope what gets uploaded for the Databricks App.
 # - exclude lockfiles: they encode resolved registry URLs which on a corporate-
@@ -43,35 +48,53 @@ sync:
     - .tmp/
 
 include:
+  - resources/schema.yml
+  - resources/volumes.yml
+  - resources/secret_scope.yml
+  - resources/lakebase.yml
   - resources/pipeline.yml
   - resources/app.yml
-  - resources/volumes.yml
 
 variables:
+  # Catalog + schema for everything UC-related: the demo tables, the frame
+  # volumes, the presenter content volume, and the Lakebase schema name.
+  # The catalog must exist in the target workspace (catalog creation is
+  # workspace-admin work that's intentionally not in the bundle). DABs
+  # creates the schema and volumes under it. Server-side code and SQL
+  # queries read DATABRICKS_CATALOG / DATABRICKS_SCHEMA at runtime (set in
+  # app.yaml from these defaults), so swapping workspaces is: change these
+  # two values + scripts/swap-uc.sh to rewrite the file-based queries that
+  # DABs can't reach.
   catalog:
-    description: Unity Catalog catalog for demo tables and the frame volume.
-    default: reggie_pierce_7405614800873570
+    description: Existing Unity Catalog catalog name. Must already exist in the target workspace.
+    default: retail_consumer_goods
   schema:
-    description: Schema for demo tables and the frame volume.
-    default: lensiq
+    description: Schema for demo tables and the frame volume (created by the bundle).
+    default: lens_iq
+  # `lookup.warehouse` resolves to the SQL warehouse with this display
+  # name in the target workspace. Override per-command with
+  # `--var "warehouse_id=<id>"` to pin a specific ID instead. SQL
+  # warehouse creation is workspace-admin work and intentionally not in
+  # the bundle (the typical deploying SP doesn't have create-endpoint
+  # permission on most shared workspaces).
   warehouse_id:
-    description: SQL Warehouse used by the analytics plugin.
-    default: 6ef03decfb060f8a
+    description: SQL Warehouse used by the analytics plugin and Genie space.
+    lookup:
+      warehouse: retail_consumer_goods_wh
   llm_endpoint:
     description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
     default: databricks-claude-opus-4-7
   # ─── Genie space ───────────────────────────────────────────────────────
   # ID of the "LensIQ Detections" Genie space backing the in-app chat
-  # surface (eventually wired through app.resources.genie_space). The
-  # space is currently created out-of-band via the databricks-genie MCP /
-  # `databricks genie spaces create` since DABs only ships GA support for
-  # binding an existing space to an app, not for declaring the space
-  # itself. The serialized config is checked in at
-  # resources/genie_space_lensiq_detections.json so the space can be
-  # recreated deterministically in any workspace.
+  # surface. DABs does not yet declare genie_spaces, so the space is
+  # (re-)created by scripts/deploy.sh from the serialized config at
+  # resources/genie_space_lensiq_detections.json, then this var is
+  # auto-populated in `.databricks/state/genie_space_id` and consumed by the
+  # app via the GENIE_SPACE_ID env var. The bundle var only exists so future
+  # DABs releases that add genie space binding can wire it up declaratively.
   genie_space_id:
-    description: Genie space ID for LensIQ Detections (bind via app.resources.genie_space).
-    default: 01f15abcc3b51cb4a4c36edf1b0d6e5e
+    description: Genie space ID created by scripts/deploy.sh from resources/genie_space_lensiq_detections.json.
+    default: ""
   # ─── Serving endpoint names ────────────────────────────────────────────
   # One endpoint per use case so each detector has its own UC registered
   # model, scale-to-zero schedule, workload size, and version history.
@@ -89,9 +112,6 @@ variables:
   # server/vision-detector.ts (one Claude call per frame covers both
   # classes; the per-frame image-hash cache serves the second
   # /api/detect call for free).
-  cigarette_vape_endpoint:
-    description: Cigarette/vape endpoint (Roboflow Inference SDK loaded on cold start).
-    default: lensiq-cigarette-vape
   slip_fall_endpoint:
     description: Slip-and-fall endpoint (Roboflow Inference SDK loaded on cold start).
     default: lensiq-slip-fall
@@ -102,60 +122,67 @@ variables:
     description: InsightFace buffalo_l detector + ArcFace 512-d embedder (PyFunc, scale-to-zero).
     default: lensiq-face-recognition
 
-  # ─── Roboflow secret ──────────────────────────────────────────────────
-  # Injected into each Roboflow-backed serving endpoint via
-  # environment_vars so the Roboflow Inference SDK can authenticate its
-  # one-time weight download + license check on cold start. Per-frame
-  # inference does NOT use the secret. The deploy notebook also reads it
-  # as an existence probe so we don't ship a model version that can never
-  # load. The app SP never needs this secret.
-  roboflow_secret_scope:
-    description: Databricks secret scope holding ROBOFLOW_API_KEY.
-    default: reggie_pierce
+  # ─── Secret scope (bundle-owned) ──────────────────────────────────────
+  # Single scope holds every secret the deploy needs. Scope itself is
+  # declared in resources/secret_scope.yml; secret VALUES are put by
+  # scripts/deploy.sh on first deploy (it reads ROBOFLOW_API_KEY and
+  # PORTR_TOKEN from the operator's env or prompts for them).
+  secret_scope:
+    description: Databricks secret scope holding roboflow_api_key and portr_token.
+    default: lens-iq
   roboflow_secret_key:
-    description: Key inside roboflow_secret_scope that holds the Roboflow API key.
-    default: ROBOFLOW_API_KEY
+    description: Key inside `secret_scope` that holds the Roboflow API key (cold-start license check on Roboflow detector endpoints).
+    default: roboflow_api_key
+  apps_tunnel_secret_key:
+    description: Key inside `secret_scope` that holds the portr client token (used only when PUBLIC_DOMAIN is set).
+    default: portr_token
 
   # ─── Lakebase Autoscaling postgres binding ────────────────────────────
-  # `projects/lens-iq/branches/production/databases/<lakebase_database>` is
-  # bound to the app via resources/app.yml -> postgres. The dev workspace
-  # has the long-form auto-generated database id (whose postgres-level db
-  # name is `lensiq`).
+  # The bundle creates the project (resources/lakebase.yml) which
+  # auto-provisions a default database on the production branch. The
+  # Lakebase resource id for that database is `databricks-postgres`
+  # (hyphen - that's the URL path segment); the in-DB Postgres name is
+  # `databricks_postgres` (underscore). The app binding in
+  # resources/app.yml uses the resource id form. Override per workspace
+  # only if you've created an additional named database via
+  # `databricks postgres create-database`.
   lakebase_database:
-    description: Lakebase Autoscaling database id under projects/lens-iq/branches/production.
-    default: db-wb61-xoxc0soijf
-
-  # ─── Public tunnel: portr client token ────────────────────────────────
-  # Databricks secret holding the portr client token used by the optional
-  # public tunnel. scripts/start.sh interpolates the value into
-  # ~/.portr/config.yaml at boot only when PUBLIC_DOMAIN is set in
-  # app.yaml. To disable the tunnel, remove the PUBLIC_DOMAIN env var
-  # and the `portr_token` resource binding (see app.yaml and
-  # resources/app.yml).
-  apps_tunnel_secret_scope:
-    description: Secret scope holding the portr client token (used when PUBLIC_DOMAIN is set).
-    default: reggie_pierce
-  apps_tunnel_secret_key:
-    description: Secret key for the portr client token under apps_tunnel_secret_scope.
-    default: apps_dbx_tools_token
+    description: Lakebase resource id of the postgres database under projects/lens-iq/branches/production/databases.
+    default: databricks-postgres
 
 targets:
-  # Single generic dev target. The `host:` is the workspace URL only; the
-  # CLI auto-resolves the matching profile from ~/.databrickscfg by host
-  # match, so we deliberately do NOT pin a profile here. To deploy somewhere
-  # else, override at the command line:
-  #   databricks bundle deploy -t dev -p <profile>
-  # or set DATABRICKS_HOST / DATABRICKS_TOKEN in the environment.
+  # Single generic dev target. No `host:` or `profile:` is pinned at the
+  # bundle level so the same checkout deploys cleanly to any workspace.
+  # Authentication resolves from one of (in priority order):
+  #   1. -p <profile> on the CLI invocation
+  #   2. DATABRICKS_CONFIG_PROFILE env var (scripts/deploy.sh sources .env
+  #      which sets DATABRICKS_CONFIG_PROFILE)
+  #   3. DATABRICKS_HOST / DATABRICKS_TOKEN env vars
+  #   4. The default profile in ~/.databrickscfg
+  # To deploy somewhere else, override the profile or host above; nothing
+  # else in this bundle is workspace-specific.
   dev:
-    mode: development
+    # `mode: production` to skip the dev-mode `dev_${user}_` prefix that
+    # `mode: development` bakes into every UC schema name. Every deploy
+    # against the booth-demo workspace lands on the SAME shared schema /
+    # volumes / app, so per-user prefixing breaks every downstream
+    # consumer that hard-codes the unprefixed names (sync scripts, app
+    # env vars, SQL queries, README docs). Trade-off: production mode
+    # forces an explicit workspace.root_path (see below) so different
+    # operators don't clobber each other's bundle state.
+    mode: production
     default: true
     workspace:
-      host: https://adb-7405614800873570.10.azuredatabricks.net
+      # Per-user state path. `${workspace.current_user.userName}` resolves
+      # at deploy time to whichever profile is authed, so two operators
+      # deploying to the same workspace don't fight over the same
+      # bundle state.
+      root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
 
 resources:
   jobs:
-    pizza_vision_seed:
-      name: pizza_vision_seed
+    lens-iq-seed:
+      name: lens-iq-seed
       tasks:
         - task_key: seed_data
           notebook_task:
@@ -195,7 +222,7 @@ resources:
               roboflow_workspace: samrat-sahoo
               roboflow_project: license-plates-f8vsn
               roboflow_version: "5"
-              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_scope: ${var.secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
         # Spill + wet-floor-sign tasks intentionally removed. Both
         # detectors now run through Claude vision on the shared
@@ -207,19 +234,6 @@ resources:
         #   databricks serving-endpoints delete lensiq-wet-floor-sign
         # Threshold rationale for the remaining Roboflow detectors
         # lives in docs/detector-calibration.md.
-        - task_key: deploy_cigarette_vape
-          notebook_task:
-            notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
-            base_parameters:
-              catalog: ${var.catalog}
-              schema: ${var.schema}
-              model_slug: cigarette_vape
-              model_display_name: Cigarette / vape
-              roboflow_workspace: train-qjr0z
-              roboflow_project: cigarette-vape-detection-lagrc-4ypjd
-              roboflow_version: "3"
-              api_key_scope: ${var.roboflow_secret_scope}
-              api_key_secret: ${var.roboflow_secret_key}
         - task_key: deploy_slip_fall
           notebook_task:
             notebook_path: ./notebooks/deploy_roboflow_detector.ipynb
@@ -231,7 +245,7 @@ resources:
               roboflow_workspace: sensormatic
               roboflow_project: slip-and-fall
               roboflow_version: "1"
-              api_key_scope: ${var.roboflow_secret_scope}
+              api_key_scope: ${var.secret_scope}
               api_key_secret: ${var.roboflow_secret_key}
 
     # Standalone Pillow+numpy classifier. No Roboflow secret, no GPU.

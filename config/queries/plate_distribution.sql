@@ -5,7 +5,7 @@
 -- "current_timestamp() - 1 day" window.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM reggie_pierce_7405614800873570.pizza_vision.license_plates
+    FROM retail_consumer_goods.lens_iq.license_plates
 ),
 window_filter AS (
     SELECT
@@ -20,7 +20,7 @@ window_filter AS (
 ),
 counts AS (
     SELECT state, COUNT(*) AS count
-    FROM reggie_pierce_7405614800873570.pizza_vision.license_plates, window_filter
+    FROM retail_consumer_goods.lens_iq.license_plates, window_filter
     WHERE ts >= start_ts AND ts <= now_ts
     GROUP BY state
 ),

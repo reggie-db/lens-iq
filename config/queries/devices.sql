@@ -5,5 +5,5 @@ SELECT
     current_temp AS currentTemp,
     status,
     DATE_FORMAT(last_update, "yyyy-MM-dd HH:mm:ss") AS lastUpdate
-FROM reggie_pierce_7405614800873570.pizza_vision.devices
+FROM retail_consumer_goods.lens_iq.devices
 ORDER BY name

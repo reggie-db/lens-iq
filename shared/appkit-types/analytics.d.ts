@@ -16,21 +16,21 @@ declare module "@databricks/appkit-ui/react" {
           max_rows: SQLNumberMarker;
         };
         result: Array<{
-          /** @sqlType BIGINT */
+          /** Unique alert id. */
           id: number;
-          /** @sqlType STRING */
+          /** Rule identifier (e.g. temperature_critical, pizza_low_stock, camera_offline, vehicle_dwell_long). */
           ruleId: string;
-          /** @sqlType STRING */
+          /** Human-readable alert text. */
           message: string;
-          /** @sqlType STRING */
+          /** critical | warning | info. Treat critical as P1. */
           severity: string;
-          /** @sqlType STRING */
+          /** Store associated with the alert. */
           storeId: string;
-          /** @sqlType STRING */
+          /** Denormalized display name (matches stores.name). */
           storeName: string;
           /** @sqlType STRING */
           ts: string;
-          /** @sqlType BOOLEAN */
+          /** Whether an operator has acknowledged the alert. */
           acknowledged: boolean;
         }>;
       };
@@ -59,11 +59,11 @@ declare module "@databricks/appkit-ui/react" {
         result: Array<{
           /** @sqlType STRING */
           kind: string;
-          /** @sqlType BIGINT */
+          /** Unique detection id. */
           id: number;
           /** @sqlType STRING */
           label: string;
-          /** @sqlType STRING */
+          /** Human-readable store name. Use this in answers, never the raw id. */
           store: string;
           /** @sqlType STRING */
           ts: string;
@@ -88,7 +88,7 @@ declare module "@databricks/appkit-ui/react" {
           max_rows: SQLNumberMarker;
         };
         result: Array<{
-          /** @sqlType BIGINT */
+          /** Unique detection id. */
           id: number;
           /** @sqlType STRING */
           type: string;
@@ -111,21 +111,21 @@ declare module "@databricks/appkit-ui/react" {
           since: SQLTimestampMarker;
         };
         result: Array<{
-          /** @sqlType BIGINT */
+          /** Unique detection id. */
           id: number;
-          /** @sqlType STRING */
+          /** Source video frame the detection came from. */
           frame_id: string;
           /** @sqlType STRING */
           ts: string;
-          /** @sqlType STRING */
+          /** Store where the detection was captured. Joins to stores.id. */
           store_id: string;
-          /** @sqlType STRING */
+          /** Class label: vehicle | truck | person | pizza | package. */
           label: string;
-          /** @sqlType BIGINT */
+          /** COCO class id (2=vehicle, 0=person, 7=truck, 84=package, 53=pizza). */
           class_id: number;
-          /** @sqlType DOUBLE */
+          /** Model confidence 0.0 to 1.0. Filter < 0.5 for executive answers unless user asks for it. */
           confidence: number;
-          /** @sqlType ARRAY<BIGINT> */
+          /** Bounding box [x1, y1, x2, y2] integer pixels in the source frame. */
           bbox: unknown[];
         }>;
       };
@@ -192,15 +192,15 @@ declare module "@databricks/appkit-ui/react" {
           ss: SQLTypeMarker;
         };
         result: Array<{
-          /** @sqlType STRING */
+          /** Device identifier. */
           id: string;
-          /** @sqlType STRING */
+          /** Friendly device label. */
           name: string;
-          /** @sqlType STRING */
+          /** City, state of the device. */
           location: string;
-          /** @sqlType DOUBLE */
+          /** Latest temperature reading in Fahrenheit. */
           currentTemp: number;
-          /** @sqlType STRING */
+          /** normal (<80F) | warning (80-90F) | critical (>90F). */
           status: string;
           /** @sqlType STRING */
           lastUpdate: string;
@@ -297,7 +297,7 @@ declare module "@databricks/appkit-ui/react" {
           period: SQLStringMarker;
         };
         result: Array<{
-          /** @sqlType STRING */
+          /** Two-letter US state abbreviation extracted from the plate. */
           state: string;
           /** @sqlType STRING */
           name: string;
@@ -316,11 +316,11 @@ declare module "@databricks/appkit-ui/react" {
           max_rows: SQLNumberMarker;
         };
         result: Array<{
-          /** @sqlType BIGINT */
+          /** Unique capture id. */
           id: number;
-          /** @sqlType STRING */
+          /** Two-letter US state abbreviation extracted from the plate. */
           state: string;
-          /** @sqlType STRING */
+          /** Plate text with final characters redacted (e.g. ABC***) for privacy. */
           plateNumber: string;
           /** @sqlType STRING */
           location: string;

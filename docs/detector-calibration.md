@@ -2,7 +2,7 @@
 
 Confidence + post-filter knobs for each detector served by this app.
 
-Most detectors (license-plate, cigarette/vape, slip-fall) are
+Most detectors (license-plate, slip-fall) are
 Roboflow-Universe models hosted via `notebooks/deploy_roboflow_detector.ipynb`.
 The bundle's `lensiq_deploy_roboflow_detectors` job (`databricks.yml`)
 wires per-model thresholds into the notebook's task parameters; this
@@ -89,13 +89,6 @@ Calibration knobs that survived the move:
 No bundle deployment is required for these two detectors. If a stale
 workspace still has the old `lensiq-spill` / `lensiq-wet-floor-sign`
 endpoints, delete them with `databricks serving-endpoints delete <name>`.
-
----
-
-## `lensiq-cigarette-vape` (train-qjr0z/cigarette-vape-detection-lagrc-4ypjd/3)
-
-No post-filter knobs; the upstream model is already conservative on the
-candidate clips.
 
 ---
 

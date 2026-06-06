@@ -217,6 +217,37 @@ function _coerceLabel(
   if (allowedLowerLabels.includes(singular)) return singular;
   if ((v === "liquid" || v === "puddle" || v === "wet-patch") && allowedLowerLabels.includes("spill")) return "spill";
   if ((v === "wet_floor_sign" || v.includes("caution") || v.includes("wet floor")) && allowedLowerLabels.includes("cone")) return "cone";
+  // Pizza-slice synonyms. Claude sometimes drops the underscore or the
+  // qualifier, so map natural variants back to the canonical label
+  // when the caller asked for "pizza_slice".
+  if (
+    allowedLowerLabels.includes("pizza_slice")
+    && (v === "slice" || v === "pizza slice" || v === "pizzaslice" || v === "slice of pizza" || v === "pizza_slice")
+  ) {
+    return "pizza_slice";
+  }
+  // Pizza-pie (whole uncut pizza) synonyms. Bare "pizza" is allowed
+  // only when the caller explicitly asked for pizza_pie - otherwise
+  // an unrelated "pizza" label from a generic detector would collide
+  // with the pizza_slice path. The pizza_inventory + pizza_pie group
+  // always passes both labels together so this branch is safe.
+  if (
+    allowedLowerLabels.includes("pizza_pie")
+    && (
+      v === "pie"
+      || v === "pizza"
+      || v === "pizza pie"
+      || v === "pizzapie"
+      || v === "whole pizza"
+      || v === "whole pie"
+      || v === "uncut pizza"
+      || v === "uncut pie"
+      || v === "round pizza"
+      || v === "pizza_pie"
+    )
+  ) {
+    return "pizza_pie";
+  }
   return null;
 }
 

@@ -36,10 +36,18 @@ LAKEBASE_PROJECT="${LAKEBASE_PROJECT:-lens-iq}"
 LAKEBASE_BRANCH="${LAKEBASE_BRANCH:-production}"
 LAKEBASE_ENDPOINT_ID="${LAKEBASE_ENDPOINT_ID:-primary}"
 # Postgres database name (the in-DB name shown in `\l` output, not the
-# Lakebase resource id used by the CLI commands).
-LAKEBASE_DB_NAME="${LAKEBASE_DB_NAME:-lensiq}"
-# Schema the app expects (see APP_SCHEMA in server/server.ts).
-LAKEBASE_SCHEMA="${LAKEBASE_SCHEMA:-app_data}"
+# Lakebase resource id used by the CLI commands). The standard
+# auto-created database on a fresh Lakebase Autoscaling production
+# branch is named `databricks_postgres` (the bundle binds the matching
+# `databricks-postgres` resource id, see databricks.yml::lakebase_database).
+LAKEBASE_DB_NAME="${LAKEBASE_DB_NAME:-databricks_postgres}"
+# Schemas the app expects. `app_data` (see APP_SCHEMA in
+# server/server.ts) holds every table the LensIQ app writes through
+# AppKit. `appkit` is auto-created by the @databricks/appkit cache
+# plugin's persistent-storage backend on first boot; the same
+# cross-owner problem applies, so both schemas get the PUBLIC bootstrap
+# here. Override with a colon-separated list to add more.
+LAKEBASE_SCHEMAS="${LAKEBASE_SCHEMAS:-${LAKEBASE_SCHEMA:-app_data:appkit}}"
 
 DATABRICKS_PROFILE_FLAG=()
 if [[ -n "${DATABRICKS_PROFILE:-}" ]]; then
@@ -75,12 +83,16 @@ PGUSER="$(databricks current-user me \
 
 export PGSSLMODE=require PGPASSWORD
 
-_log "applying to ${LAKEBASE_DB_NAME}.${LAKEBASE_SCHEMA} (as ${PGUSER}@${PGHOST})"
-
 # `:"schema"` is psql's identifier-quoting variable substitution; it produces
-# correctly quoted "app_data" in every position.
-psql -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$LAKEBASE_DB_NAME" \
-  -v ON_ERROR_STOP=1 -v schema="${LAKEBASE_SCHEMA}" --quiet <<'SQL'
+# correctly quoted "app_data" in every position. Loop over each schema so
+# the SP and any future role can read/write both the LensIQ app's tables
+# and the AppKit cache plugin's bookkeeping tables.
+IFS=':' read -r -a _schemas <<< "$LAKEBASE_SCHEMAS"
+for _schema in "${_schemas[@]}"; do
+  [[ -n "$_schema" ]] || continue
+  _log "applying to ${LAKEBASE_DB_NAME}.${_schema} (as ${PGUSER}@${PGHOST})"
+  psql -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$LAKEBASE_DB_NAME" \
+    -v ON_ERROR_STOP=1 -v schema="${_schema}" --quiet <<'SQL'
 CREATE SCHEMA IF NOT EXISTS :"schema";
 GRANT USAGE, CREATE ON SCHEMA :"schema" TO PUBLIC;
 GRANT ALL ON ALL TABLES    IN SCHEMA :"schema" TO PUBLIC;
@@ -88,5 +100,6 @@ GRANT ALL ON ALL SEQUENCES IN SCHEMA :"schema" TO PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA :"schema" GRANT ALL ON TABLES    TO PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA :"schema" GRANT ALL ON SEQUENCES TO PUBLIC;
 SQL
+done
 
 _log "done."

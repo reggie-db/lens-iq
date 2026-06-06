@@ -8,7 +8,7 @@ SELECT
     class_id,
     confidence,
     bbox
-FROM reggie_pierce_7405614800873570.pizza_vision.detections
+FROM retail_consumer_goods.lens_iq.detections
 WHERE ts > :since
 ORDER BY ts
 LIMIT 200

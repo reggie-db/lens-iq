@@ -66,23 +66,12 @@ declare module "@databricks/appkit" {
     };
     license_plate: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    cigarette_vape: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
     slip_fall: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
     fog_detector: {
@@ -94,9 +83,7 @@ declare module "@databricks/appkit" {
     };
     face_recognition: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
   }
@@ -165,23 +152,12 @@ declare module "@databricks/appkit-ui/react" {
     };
     license_plate: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    cigarette_vape: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
     slip_fall: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
     fog_detector: {
@@ -193,9 +169,7 @@ declare module "@databricks/appkit-ui/react" {
     };
     face_recognition: {
       request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
+      response: unknown;
       chunk: unknown;
     };
   }

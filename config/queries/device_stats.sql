@@ -4,4 +4,4 @@ SELECT
     SUM(CASE WHEN status = "critical" THEN 1 ELSE 0 END) AS criticalCount,
     CAST(ROUND(AVG(current_temp), 1) AS STRING) AS avgTemp,
     COUNT(*) AS totalDevices
-FROM reggie_pierce_7405614800873570.pizza_vision.devices
+FROM retail_consumer_goods.lens_iq.devices

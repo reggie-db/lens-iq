@@ -19,7 +19,7 @@
 // future feature.
 
 import type { Response } from "express";
-import { getServingAliasConfig } from "./serving-aliases";
+import { getServingAliasConfig, resolveServingEndpointName } from "./serving-aliases";
 
 /** Shape every `appkit.serving(alias).invoke(...)` call returns. */
 export interface ServingInvokeResult {
@@ -101,6 +101,16 @@ export async function invokeServing(
   alias: string,
   payload: Record<string, unknown>,
 ): Promise<unknown> {
+  // Pre-check the alias is bound to a populated env var. server.ts now
+  // filters its `serving({ endpoints })` map down to aliases whose env
+  // var is set, so an unbound alias here means the app.yml binding (and
+  // therefore the deploy job + endpoint) is missing. AppKit would throw
+  // a generic "alias not configured" error in that case; intercepting
+  // here lets the UI render the same friendly "run this bundle job"
+  // hint it gets when the endpoint exists but isn't reachable.
+  if (!resolveServingEndpointName(alias)) {
+    throw _classify(alias, `Serving alias '${alias}' is not configured (env var unset)`);
+  }
   let result: ServingInvokeResult;
   try {
     result = (await appkit.serving(alias).invoke(payload)) as ServingInvokeResult;

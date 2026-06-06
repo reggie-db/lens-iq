@@ -107,9 +107,9 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
   {
     id: "cstore-interior",
     name: "C-store interior (CCTV)",
-    description: "HD overhead CCTV inside a convenience store: aisles, customers, register area. Strong fit for yolo, people_count, cigarette_vape. Also the `clear` baseline for the fog_detector when paired with cstore-foggy-lens.",
+    description: "HD overhead CCTV inside a convenience store: aisles, customers, register area. Strong fit for yolo and people_count. Also the `clear` baseline for the fog_detector when paired with cstore-foggy-lens.",
     local: "cstore-hd-cctv.mp4",
-    models: ["yolo", "people_count", "cigarette_vape", "fog_detector"],
+    models: ["yolo", "people_count", "fog_detector"],
   },
   {
     id: "aisle-spill-then-cone",
@@ -230,6 +230,62 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     description: "Synthetic partial-fog version of grocery-produce-aisle - same vantage with a heavy center-blob smudge over the weigh station and central produce baskets. The fog hides the busiest area of the camera's field of view while shopping carts at the edges stay sharp, which is the exact failure mode the fog_detector is designed to catch before downstream models miss shoplifters / spills.",
     local: "grocery-produce-aisle-foggy-lens.mp4",
     models: ["fog_detector", "yolo", "people_count"],
+  },
+
+  // ---------------------------------------------------------------------------
+  // QSR pizza counter cameras. Clean stock pizza clips (Mixkit) degraded into
+  // security-camera footage offline with scripts/synth_cctv_look.sh: 12fps,
+  // 720p, desaturated + contrast/gamma pulled toward a cheap sensor, light
+  // lens blur, per-frame grain, vignette, and a burnt-in HUD (running clock,
+  // "CAM NN" label, blinking REC). The pizza stays large and centered so the
+  // COCO `pizza` class fires cleanly while the frame reads as surveillance -
+  // the canonical "pizza on a counter" source for the yolo live demo.
+  // ---------------------------------------------------------------------------
+  {
+    id: "pizza-counter-overhead",
+    name: "Pizza counter overhead (CCTV)",
+    description: "Top-down counter camera over a whole pepperoni pizza, a hand reaching in for a slice. The cleanest single-object `pizza` shot - default clip for the yolo pizza demo.",
+    local: "pizza-counter-overhead.mp4",
+    models: ["yolo"],
+  },
+  {
+    id: "pizza-counter-dinein",
+    name: "Pizza dining table (CCTV)",
+    description: "High-angle dining-area camera: a pepperoni pizza on a board with several hands taking slices, plus cups and plates around it. Exercises yolo (pizza + cup + person) and people_count.",
+    local: "pizza-counter-dinein.mp4",
+    models: ["yolo", "people_count"],
+  },
+  {
+    id: "pizza-counter-prep",
+    name: "Pizza prep station (CCTV)",
+    description: "Tight prep-station camera filling the frame with a fresh pepperoni pie. High-confidence single `pizza` detection for stress-testing the yolo endpoint.",
+    local: "pizza-counter-prep.mp4",
+    models: ["yolo"],
+  },
+  {
+    id: "pizza-counter-cut",
+    name: "Pizza cut station (CCTV)",
+    description: "Cut-station camera as a pizza wheel rolls through a loaded pie. Moving object in frame - good for showing per-frame yolo detection holding across motion.",
+    local: "pizza-counter-cut.mp4",
+    models: ["yolo"],
+  },
+
+  // ---------------------------------------------------------------------------
+  // Pizza slice inventory. Separate from the generic "QSR pizza counter"
+  // CCTV clips above because this stage of the storyline is about
+  // available-slice counting (a Claude-vision-only flow), not
+  // generic YOLO `pizza` detection. The clip shows a pepperoni pie
+  // partially cut into wedges with hands lifting slices off the board -
+  // the canonical source for the pizza_inventory model. Use the model
+  // to estimate how many slices remain, then alert hot-hold staff when
+  // the count crosses a low-stock threshold.
+  // ---------------------------------------------------------------------------
+  {
+    id: "pizza-slice-inventory",
+    name: "Pizza slice inventory (counter cam)",
+    description: "Counter camera over a partially-sliced pepperoni pizza with diners lifting wedges off the board. Each visible slice becomes a separate Claude vision bbox, and the count of detections IS the available-slice estimate driving hot-hold restock alerts.",
+    local: "pizza-slice-inventory.mp4",
+    models: ["pizza_inventory", "pizza_pie", "yolo"],
   },
 ];
 

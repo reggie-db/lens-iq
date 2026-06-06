@@ -6,7 +6,7 @@
 -- the size of "recent" so trend % stays comparable.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM reggie_pierce_7405614800873570.pizza_vision.detections
+    FROM retail_consumer_goods.lens_iq.detections
 ),
 window_filter AS (
     SELECT
@@ -21,13 +21,13 @@ window_filter AS (
 ),
 recent AS (
     SELECT label, COUNT(*) AS count
-    FROM reggie_pierce_7405614800873570.pizza_vision.detections, window_filter
+    FROM retail_consumer_goods.lens_iq.detections, window_filter
     WHERE ts >= start_ts AND ts <= now_ts
     GROUP BY label
 ),
 prior AS (
     SELECT label, COUNT(*) AS count
-    FROM reggie_pierce_7405614800873570.pizza_vision.detections, window_filter
+    FROM retail_consumer_goods.lens_iq.detections, window_filter
     WHERE ts >= start_ts - (now_ts - start_ts)
       AND ts <  start_ts
     GROUP BY label

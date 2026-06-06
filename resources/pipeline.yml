@@ -11,7 +11,13 @@ resources:
       schema: ${var.schema}
       serverless: true
       continuous: true
-      development: true
+      # `development: true` would require `mode: development` at the
+      # bundle-target level (see databricks.yml::targets.dev). We use
+      # `mode: production` instead to skip the UC schema name prefixing,
+      # so this flag has to stay false. The pipeline still runs end-to-end
+      # in development-friendly ways (serverless, continuous off when
+      # idle) via the other settings below.
+      development: false
       libraries:
         - file:
             path: ../pipelines/pizza_vision_pipeline.py

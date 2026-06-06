@@ -11,7 +11,8 @@
 //   license_plate     | license_plate      | lensiq-license-plate
 //   spill             | llm                | databricks-claude-* (foundation)
 //   wet_floor_sign    | llm                | databricks-claude-* (foundation)
-//   cigarette_vape    | cigarette_vape     | lensiq-cigarette-vape
+//   pizza_inventory   | llm                | databricks-claude-* (foundation)
+//   pizza_pie         | llm                | databricks-claude-* (foundation)
 //   slip_fall         | slip_fall          | lensiq-slip-fall
 //   fog_detector      | fog_detector       | lensiq-fog-detector
 //
@@ -75,13 +76,28 @@ export const MODELS: ModelDefinition[] = [
     servingAlias: "llm",
     color: "#f97316",
   },
+  // Pizza Inventory pair. Both models go through one Claude vision call
+  // per frame (same labels + prompt -> image-hash cache hit on the
+  // second /api/detect). The Pizza Inventory page calls both in
+  // parallel each tick so the operator sees "X slices available" and
+  // "Y whole pies staged" from a single round-trip. See
+  // server/server.ts VISION_GROUPS for the shared prompt and
+  // ./samples.ts -> "Pizza slice inventory" for the canonical clip.
   {
-    id: "cigarette_vape",
-    name: "Cigarette / vape",
-    description: "Loss-prevention model. Detects cigarettes and vapes around c-store age-gated areas.",
+    id: "pizza_inventory",
+    name: "Pizza slice inventory",
+    description: "Counts available pizza slices on the counter via a Databricks-hosted Claude vision call. Each detected slice gets its own bounding box; the total count is the slice inventory feeding hot-hold restock alerts.",
     provider: "databricks",
-    servingAlias: "cigarette_vape",
-    color: "#a855f7",
+    servingAlias: "llm",
+    color: "#b91c1c",
+  },
+  {
+    id: "pizza_pie",
+    name: "Whole pizzas",
+    description: "Counts complete uncut pizzas currently staged using the same Databricks-hosted Claude vision call as the slice counter. Paired with pizza_inventory to give an operator both `slices ready` and `pies staged` counts from one round-trip.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#f59e0b",
   },
   {
     id: "slip_fall",

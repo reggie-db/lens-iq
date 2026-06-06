@@ -12,6 +12,6 @@ SELECT
     size_bytes,
     num_detections,
     to_json(detections) AS detections_json
-FROM reggie_pierce_7405614800873570.pizza_vision.pipeline_frames
+FROM retail_consumer_goods.lens_iq.pipeline_frames
 ORDER BY pipeline_ts DESC
 LIMIT :max_rows

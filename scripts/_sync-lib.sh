@@ -99,7 +99,20 @@ sync_run() {
   [[ -d "$src" ]] || _die "missing source dir: $src"
 
   _log "target=${TARGET_NAME:-?} profile=${PROFILE:-<default>} -> dbfs:$dst"
-  databricks sync ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} "$@" "$src" "$dst"
+
+  # `databricks sync` would be the obvious choice (incremental, watches
+  # for changes), but it currently fails with "does not have View
+  # permissions on 0" against managed UC volumes on workspaces with
+  # Default Storage enabled, even when the operator owns the volume.
+  # `databricks fs cp --overwrite -r` works on the same volume from the
+  # same identity, so we use that for the initial push and let
+  # sync_repair below skip anything that's already correctly sized.
+  #
+  # First call after a clean deploy uploads everything; subsequent
+  # re-syncs are fast because sync_repair size-checks each file and only
+  # re-uploads on mismatch.
+  databricks fs cp ${SYNC_PROFILE_FLAG[@]+"${SYNC_PROFILE_FLAG[@]}"} \
+    --overwrite --recursive "$src" "dbfs:${dst}"
 
   sync_repair "$src" "$dst"
 }

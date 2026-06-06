@@ -6,7 +6,7 @@
 # (warehouse, YOLO endpoint, volume), then launches `npm run dev`.
 #
 # Flags:
-#   --seed       run `pizza_vision_seed` bundle job before starting (creates
+#   --seed       run `lens-iq-seed` bundle job before starting (creates
 #                catalog/schema/volumes/tables).
 #   --deploy-yolo  run `pizza_vision_deploy_yolo` bundle job (builds + serves
 #                  the YOLO detector model).
@@ -80,8 +80,8 @@ fi
 
 # --- optional one-shot bundle jobs ------------------------------------------
 if [[ "$DO_SEED" -eq 1 ]]; then
-  _log "running pizza_vision_seed (catalog/schema/volumes/tables)"
-  databricks bundle run pizza_vision_seed -t dev
+  _log "running lens-iq-seed (catalog/schema/volumes/tables)"
+  databricks bundle run lens-iq-seed -t dev
 fi
 
 if [[ "$DO_DEPLOY_YOLO" -eq 1 ]]; then

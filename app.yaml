@@ -4,6 +4,16 @@ command:
 env:
   - name: NODE_ENV
     value: production
+  # ─── Unity Catalog target ────────────────────────────────────────────
+  # Server constants (server/uc.ts) and direct analytics.query() calls
+  # read these at runtime. KEEP IN SYNC with databricks.yml::variables
+  # (catalog/schema) and with the `.env` defaults. DABs only interpolates
+  # bundle vars inside app.yaml as of CLI 0.283.0+; treat these as
+  # literals you swap when you move workspaces.
+  - name: DATABRICKS_CATALOG
+    value: retail_consumer_goods
+  - name: DATABRICKS_SCHEMA
+    value: lens_iq
   # ─── Public tunnel (opt-in) ──────────────────────────────────────────
   # scripts/start.sh installs portr and registers a tunnel only when
   # PUBLIC_DOMAIN is set. The leftmost label of PUBLIC_DOMAIN becomes the
@@ -39,8 +49,6 @@ env:
     valueFrom: license_plate
   # Spill + wet_floor_sign reuse the `llm` endpoint (see
   # server/vision-detector.ts); no dedicated env vars needed.
-  - name: DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE
-    valueFrom: cigarette_vape
   - name: DATABRICKS_SERVING_ENDPOINT_SLIP_FALL
     valueFrom: slip_fall
   - name: DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR

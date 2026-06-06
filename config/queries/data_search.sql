@@ -7,8 +7,8 @@ SELECT
     s.name AS store,
     DATE_FORMAT(d.ts, "yyyy-MM-dd'T'HH:mm:ss") AS ts,
     CAST(ROUND(d.confidence * 100, 0) AS INT) AS confidence
-FROM reggie_pierce_7405614800873570.pizza_vision.detections d
-LEFT JOIN reggie_pierce_7405614800873570.pizza_vision.stores s ON s.id = d.store_id
+FROM retail_consumer_goods.lens_iq.detections d
+LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = d.store_id
 WHERE :search = "" OR d.label LIKE LOWER(CONCAT("%", :search, "%"))
 ORDER BY d.ts DESC
 LIMIT :max_rows

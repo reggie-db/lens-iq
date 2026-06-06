@@ -118,8 +118,8 @@ export const TOUR_STEPS: TourStep[] = [
       <>
         <p>
           Each detector is its own <b>UC-registered PyFunc on its own serving
-          endpoint</b>: spill, plate, wet-floor sign, cigarette/vape,
-          slip-and-fall, plus a pure-Python fog/lens-condition classifier.
+          endpoint</b>: spill, plate, wet-floor sign, slip-and-fall, plus a
+          pure-Python fog/lens-condition classifier.
         </p>
         <p className="mt-2 text-slate-500">
           Independent versioning, scale-to-zero, and cost per detector. Add

@@ -3,12 +3,12 @@
 -- stale.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM reggie_pierce_7405614800873570.pizza_vision.detections
+    FROM retail_consumer_goods.lens_iq.detections
 )
 SELECT
     DATE_FORMAT(date_trunc("HOUR", d.ts), "HH:00") AS hour,
     COUNT(*) AS count
-FROM reggie_pierce_7405614800873570.pizza_vision.detections d, anchor a
+FROM retail_consumer_goods.lens_iq.detections d, anchor a
 WHERE d.ts >= a.now_ts - INTERVAL 1 DAYS
   AND d.ts <= a.now_ts
 GROUP BY date_trunc("HOUR", d.ts)

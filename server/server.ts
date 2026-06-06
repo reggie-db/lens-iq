@@ -8,6 +8,7 @@ import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts"
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
 import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
+import { startServingKeepAlive } from "./serving-keepalive.ts";
 import { detectWithClaude, type VisionDetection } from "./vision-detector.ts";
 import { decodeImage, toBase64Body, toDataUrl } from "./image-data-url.ts";
 import { extractChatText, extractJsonObject } from "./llm-response.ts";
@@ -66,7 +67,7 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 //   - server(): Express + Vite middleware (dev) / static (prod).
 //   - analytics(): file-based SQL queries against the SQL warehouse (SP).
 //   - serving({ llm, detector, license_plate, spill, wet_floor_sign,
-//               cigarette_vape, slip_fall, fog_detector }):
+//               slip_fall, fog_detector }):
 //     One Databricks Model Serving endpoint per use case. Each alias is
 //     bound to its own UC registered model + endpoint. The model selected
 //     by the client maps 1:1 to its `servingAlias` (see client/src/lib/models.ts).
@@ -92,11 +93,63 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 
 const POLL_INTERVAL_MS = 2000;
 const SSE_HEARTBEAT_MS = 15_000;
-const TABLE_DETECTIONS = "reggie_pierce_7405614800873570.pizza_vision.detections";
+
+// Unity Catalog target. Resolved from env at module load so swapping
+// workspaces is "set DATABRICKS_CATALOG / DATABRICKS_SCHEMA + restart".
+// Defaults mirror databricks.yml::variables.{catalog,schema}; .env and
+// app.yaml are where the live values come from. Server-side direct SQL
+// (DETECTIONS_SINCE_SQL, the insert below, the per-second poll) all
+// route through UC_TABLE(...) so no literal table identifier is baked
+// into the build.
+const UC_CATALOG = process.env.DATABRICKS_CATALOG ?? "retail_consumer_goods";
+const UC_SCHEMA  = process.env.DATABRICKS_SCHEMA  ?? "lens_iq";
+const UC_TABLE = (name: string) => `${UC_CATALOG}.${UC_SCHEMA}.${name}`;
+const TABLE_DETECTIONS = UC_TABLE("detections");
 const STORE_IDS = [
   "S-ATL-001", "S-ATL-002", "S-DAL-001", "S-HOU-001",
   "S-TAM-001", "S-TAM-002", "S-NAS-001", "S-CHA-001",
 ] as const;
+
+// Pick a deterministic-ish store per write so the UC mirror tables roll up
+// across the fleet instead of attributing every demo click to the same store.
+// Used by every Lakebase write-back route below; the Lakebase row itself
+// doesn't carry store_id (the demo app is single-tenant) but the UC mirror
+// needs one so Genie can group by store.
+function _randomStoreId(): string {
+  return STORE_IDS[Math.floor(Math.random() * STORE_IDS.length)];
+}
+
+// Build a multi-row INSERT against a UC table reachable through the analytics
+// plugin (Spark SQL warehouse). Mirrors `buildBatchInsert` in server/util.ts
+// but emits Spark's named-placeholder shape (`:name`) instead of pg-style
+// `$N`, because the AppKit analytics plugin uses the SQL warehouse and
+// requires `sql.*`-typed bind values keyed by name. Placeholders are
+// per-row-and-column so a single multi-row insert is one round trip.
+function _buildUcMirrorInsert(
+  table: string,
+  columns: readonly string[],
+  rowCount: number,
+): string {
+  const rowsSql: string[] = [];
+  for (let i = 0; i < rowCount; i++) {
+    rowsSql.push(`(${columns.map((c) => `:r${i}_${c}`).join(", ")})`);
+  }
+  return `INSERT INTO ${UC_TABLE(table)} (${columns.join(", ")}) VALUES ${rowsSql.join(", ")}`;
+}
+
+// Flatten an array of {col -> bound sql value} rows into the parameter
+// object the analytics plugin expects.
+function _ucMirrorParams(
+  rows: ReadonlyArray<Record<string, unknown>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  rows.forEach((row, i) => {
+    for (const [col, val] of Object.entries(row)) {
+      out[`r${i}_${col}`] = val;
+    }
+  });
+  return out;
+}
 
 const DETECTIONS_SINCE_SQL = `
 SELECT
@@ -523,26 +576,34 @@ const AppKit = await createApp({
     }),
     analytics({}),
     serving({
-      endpoints: {
-        // llm doubles as the vision backend for spill + wet_floor_sign
-        // (see server/vision-detector.ts). Those two detectors no
-        // longer have their own Roboflow endpoint binding because the
-        // foundation model handles both with one call per frame.
-        llm: { env: "DATABRICKS_SERVING_ENDPOINT_LLM" },
-        // One endpoint per remaining detector use case. Aliases must
-        // match the `servingAlias` values in client/src/lib/models.ts
-        // so /api/detect can look up the right endpoint by model id.
-        detector: { env: "DATABRICKS_SERVING_ENDPOINT_DETECTOR" },
-        license_plate: { env: "DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE" },
-        cigarette_vape: { env: "DATABRICKS_SERVING_ENDPOINT_CIGARETTE_VAPE" },
-        slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
-        fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
-        // InsightFace buffalo_l: per-frame face detect + 512-d ArcFace
-        // embedding. Called from /api/face-match (live) and /api/faces
-        // (one-shot upload). Matching against the enrolled `faces` table
-        // happens server-side via pgvector cosine search.
-        face_recognition: { env: "DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION" },
-      },
+      // Only register endpoints whose env vars are populated. The platform
+      // sets each env var from the matching `resources/app.yml` binding;
+      // scripts/deploy.sh drops bindings for endpoints that aren't deployed
+      // yet (e.g. ROBOFLOW_API_KEY unset -> license_plate / slip_fall
+      // bindings dropped). Registering an alias with an unset env var
+      // makes AppKit's resource registry fail strict validation at boot
+      // (ConfigurationError: Missing required resources). Filtering here
+      // mirrors the app.yml filter so the app still starts; invocations
+      // against a missing alias surface as EndpointNotDeployedError via
+      // serving-invoke.ts.
+      //
+      // Aliases must match the `servingAlias` values in
+      // client/src/lib/models.ts so /api/detect can look up the right
+      // endpoint by model id. `llm` doubles as the vision backend for
+      // spill + wet_floor_sign (see server/vision-detector.ts);
+      // `face_recognition` is InsightFace buffalo_l (per-frame detect +
+      // 512-d ArcFace embedding) called from /api/face-match and
+      // /api/faces.
+      endpoints: Object.fromEntries(
+        Object.entries({
+          llm: { env: "DATABRICKS_SERVING_ENDPOINT_LLM" },
+          detector: { env: "DATABRICKS_SERVING_ENDPOINT_DETECTOR" },
+          license_plate: { env: "DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE" },
+          slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
+          fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
+          face_recognition: { env: "DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION" },
+        }).filter(([, cfg]) => Boolean(process.env[cfg.env])),
+      ),
     }),
     files({
       // Volumes are reached as the app service principal. The DAB declares
@@ -786,9 +847,37 @@ const AppKit = await createApp({
         match: string;
         promptAddendum?: string;
       }
+      // Shared prompt for the pizza-station camera. Both pizza_inventory
+      // (slices) and pizza_pie (whole pies) use the same labels + addendum
+      // so one Claude call per frame serves both - the second /api/detect
+      // call from the Pizza Inventory page hits the image-hash cache.
+      const _PIZZA_INVENTORY_PROMPT =
+        "The camera looks down at a pizza station, counter, or " +
+        "cutting board. Detect (a) every individually-cut pizza slice " +
+        "currently visible as label `pizza_slice`, even when a hand " +
+        "is lifting one off the board, and (b) every complete uncut " +
+        "round pizza as label `pizza_pie`. A pie that has already " +
+        "been cut into wedges should be reported as its individual " +
+        "`pizza_slice` detections, NOT as a `pizza_pie`. Do not " +
+        "include drink cups, napkins, plates, hands, or pizza boxes.";
       const VISION_GROUPS: Record<string, VisionGroup> = {
         spill: { labels: ["spill", "cone"], match: "spill" },
         wet_floor_sign: { labels: ["spill", "cone"], match: "cone" },
+        // Pizza Inventory page calls both models in parallel each tick.
+        // pizza_inventory surfaces only `pizza_slice` hits (available
+        // slices on the board); pizza_pie surfaces only `pizza_pie`
+        // hits (whole uncut pizzas in frame). Same labels + addendum
+        // means both /api/detect calls share one Claude round-trip.
+        pizza_inventory: {
+          labels: ["pizza_slice", "pizza_pie"],
+          match: "pizza_slice",
+          promptAddendum: _PIZZA_INVENTORY_PROMPT,
+        },
+        pizza_pie: {
+          labels: ["pizza_slice", "pizza_pie"],
+          match: "pizza_pie",
+          promptAddendum: _PIZZA_INVENTORY_PROMPT,
+        },
       };
 
       function _toNormalizedDetections(hits: VisionDetection[], modelId: string): NormalizedDetection[] {
@@ -974,6 +1063,40 @@ const AppKit = await createApp({
         );
       }
 
+      // Mirror an array of rows into the matching UC table via the analytics
+      // plugin so the LensIQ Genie space can answer questions about live
+      // write-back data (the Lakebase tables aren't visible to Genie).
+      // Best-effort: failures are logged but never bubble up - the user's
+      // request already succeeded in Lakebase. Fire-and-forget: callers can
+      // `void _mirrorToUC(...)` so the response isn't blocked on the SQL
+      // warehouse round trip. Re-entrant under load (multiple rows in one
+      // INSERT) so this is at most one analytics.query per route invocation.
+      //
+      // The `unknown` casts at the analytics.query boundary widen the
+      // `Record<string, unknown>` row shape into the analytics plugin's
+      // `Record<string, SQLTypeMarker | null | undefined>` parameter type.
+      // Callers are still required to use the `sql.*` helpers (string,
+      // bigint, double, etc.) for each value - that's where the actual
+      // type safety lives.
+      async function _mirrorToUC(
+        table: string,
+        columns: readonly string[],
+        rows: ReadonlyArray<Record<string, unknown>>,
+      ): Promise<void> {
+        if (rows.length === 0) return;
+        try {
+          const stmt = _buildUcMirrorInsert(table, columns, rows.length);
+          const params = _ucMirrorParams(rows);
+          await appkit.analytics.query(
+            stmt,
+            params as Parameters<typeof appkit.analytics.query>[1],
+          );
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`UC mirror insert failed (${table}): ${message}`);
+        }
+      }
+
       // Bootstrap DDL is best-effort: any CREATE that fails (race with a
       // peer process, table/index already exists under a different owner
       // in local dev against an SP-owned schema, extension not installable
@@ -1039,6 +1162,24 @@ const AppKit = await createApp({
             body.batch,
           );
           const result = await appkit.lakebase.query(stmt, params);
+          // UC mirror so Genie can answer guest-traffic questions. store_id
+          // falls back to a random fleet store when the client doesn't tag
+          // its rows (booth demo runs single-tenant).
+          const ts = new Date().toISOString();
+          const baseId = Date.now();
+          const mirrorRows = body.batch.map((row, i) => ({
+            id:           sql.bigint(baseId + i),
+            ts:           sql.timestamp(ts),
+            source_id:    sql.string(row.source_id),
+            zone:         sql.string(row.zone),
+            person_count: sql.bigint(row.person_count),
+            store_id:     sql.string(row.store_id ?? _randomStoreId()),
+          }));
+          void _mirrorToUC(
+            "guest_counts",
+            ["id", "ts", "source_id", "zone", "person_count", "store_id"],
+            mirrorRows,
+          );
           return { inserted: result.rowCount ?? 0 };
         },
       ));
@@ -1194,6 +1335,27 @@ const AppKit = await createApp({
             body.batch,
           );
           const result = await appkit.lakebase.query(stmt, params);
+          // UC mirror so Genie can answer plate / dwell / state-of-origin
+          // questions. plate_image is omitted from the mirror to keep the UC
+          // row small - the privacy-safe view of plates already lives in the
+          // seeded license_plates table.
+          const ts = new Date().toISOString();
+          const baseId = Date.now();
+          const mirrorRows = body.batch.map((row, i) => ({
+            id:                   sql.bigint(baseId + i),
+            ts:                   sql.timestamp(ts),
+            source_id:            sql.string(row.source_id),
+            store_id:             sql.string(_randomStoreId()),
+            plate_text:           sql.string(row.plate_text),
+            confidence:           sql.double(row.confidence),
+            ocr_model:            row.ocr_model != null ? sql.string(row.ocr_model) : null,
+            detection_confidence: row.detection_confidence != null ? sql.double(row.detection_confidence) : null,
+          }));
+          void _mirrorToUC(
+            "plate_reads",
+            ["id", "ts", "source_id", "store_id", "plate_text", "confidence", "ocr_model", "detection_confidence"],
+            mirrorRows,
+          );
           return { inserted: result.rowCount ?? 0 };
         },
       ));
@@ -1273,6 +1435,25 @@ const AppKit = await createApp({
             body.batch,
           );
           const result = await appkit.lakebase.query(stmt, params);
+          // UC mirror so Genie can answer camera-health / cleaning-schedule
+          // questions.
+          const ts = new Date().toISOString();
+          const baseId = Date.now();
+          const mirrorRows = body.batch.map((row, i) => ({
+            id:           sql.bigint(baseId + i),
+            ts:           sql.timestamp(ts),
+            source_id:    sql.string(row.source_id),
+            store_id:     sql.string(_randomStoreId()),
+            camera_label: sql.string(row.camera_label),
+            fogged:       sql.boolean(row.fogged),
+            region_count: sql.bigint(row.region_count),
+            area_pct:     sql.double(row.area_pct),
+          }));
+          void _mirrorToUC(
+            "fog_observations",
+            ["id", "ts", "source_id", "store_id", "camera_label", "fogged", "region_count", "area_pct"],
+            mirrorRows,
+          );
           return { inserted: result.rowCount ?? 0 };
         },
       ));
@@ -1385,6 +1566,22 @@ const AppKit = await createApp({
              VALUES ($1, $2, $3, $4, $5)
              RETURNING id`,
             [body.source_id, body.spill_first_ts, body.cone_first_ts, body.response_ms, body.was_assisted],
+          );
+          // UC mirror so Genie can answer "what was our spill response time"
+          // questions.
+          void _mirrorToUC(
+            "spill_cycles",
+            ["id", "ts", "source_id", "store_id", "spill_first_ts", "cone_first_ts", "response_ms", "was_assisted"],
+            [{
+              id:             sql.bigint(Date.now()),
+              ts:             sql.timestamp(new Date().toISOString()),
+              source_id:      sql.string(body.source_id),
+              store_id:       sql.string(_randomStoreId()),
+              spill_first_ts: sql.timestamp(body.spill_first_ts),
+              cone_first_ts:  sql.timestamp(body.cone_first_ts),
+              response_ms:    sql.bigint(body.response_ms),
+              was_assisted:   sql.boolean(body.was_assisted),
+            }],
           );
           return { inserted: r.rowCount ?? 0 };
         },
@@ -1765,6 +1962,24 @@ const AppKit = await createApp({
               } catch (err) {
                 console.warn("face_matches insert failed:", err);
               }
+              // UC mirror so Genie can answer "which stores saw banned/vip
+              // matches" questions. The mirror omits bbox + frame_image to
+              // keep the row narrow; the Lakebase row above keeps both for
+              // the in-app review surface.
+              void _mirrorToUC(
+                "face_matches",
+                ["id", "ts", "source_id", "store_id", "face_id", "name", "role", "similarity"],
+                [{
+                  id:         sql.bigint(now),
+                  ts:         sql.timestamp(new Date(now).toISOString()),
+                  source_id:  sql.string(body.source_id),
+                  store_id:   sql.string(_randomStoreId()),
+                  face_id:    sql.bigint(match.face_id),
+                  name:       sql.string(match.name),
+                  role:       sql.string(match.role),
+                  similarity: sql.double(match.similarity),
+                }],
+              );
             }
           }
         }
@@ -1927,6 +2142,14 @@ const AppKit = await createApp({
       // status here so handlers don't have to.
       app.use(errorMiddleware);
     });
+
+    // Keep custom serving endpoints warm during the working window so
+    // a presenter walking up to the booth never eats a 30-60 s cold
+    // start. Reads the SERVING_ALIASES registry, filters to aliases
+    // whose env var is populated (matching the `serving({ endpoints })`
+    // filter above), and pings each one every 15 s between 6am ET and
+    // 10pm PT. Toggle off with SERVING_ENDPOINT_KEEP_ALIVE=false.
+    startServingKeepAlive(appkit);
   },
 });
 

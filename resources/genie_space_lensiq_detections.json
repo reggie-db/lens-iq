@@ -3,75 +3,1104 @@
   "config": {
     "sample_questions": [
       {
-        "id": "01f15abcc3ea14e09b1b163b5b0d2237",
+        "id": "10000000000000000000000000000001",
         "question": [
-          "How many detections did we get in the last 24 hours, broken down by label?"
+          "How many cars came through the drive-thru today, per store, vs yesterday?"
         ]
       },
       {
-        "id": "01f15abcc3ea1b4d93e6e940f58f48df",
+        "id": "10000000000000000000000000000002",
         "question": [
-          "Which store had the most vehicle detections this week?"
+          "What's the pump-to-store conversion rate this week (cars on forecourt vs guests entering the store)?"
         ]
       },
       {
-        "id": "01f15abcc3eb1147b35997a049bfd4b3",
+        "id": "10000000000000000000000000000003",
         "question": [
-          "Show the hourly detection volume for the last 3 days."
+          "What's the busiest hour of the day across the fleet, measured by vehicle detections in the last 7 days?"
         ]
       },
       {
-        "id": "01f15abcc3eb16d0b89e581a2bf0c312",
+        "id": "10000000000000000000000000000004",
         "question": [
-          "What is the average detection confidence per label?"
+          "What was our average spill -> cone response time in the last 24 hours, and which store was slowest?"
         ]
       },
       {
-        "id": "01f15abcc3eb1c2da625e0af3df82bd1",
+        "id": "10000000000000000000000000000005",
         "question": [
-          "Which cameras have been offline the most in the last day?"
+          "Which states do our drive-thru customers come from, this week vs last week?"
         ]
       },
       {
-        "id": "01f15abcc3ec11efa851f9b48faeff72",
+        "id": "10000000000000000000000000000006",
         "question": [
-          "List the most recent 20 alerts with their severity and store."
+          "Show me license plates that appeared at more than one store in the last 7 days."
         ]
       },
       {
-        "id": "01f15abcc3ec1848b591cac49c7fb3e5",
+        "id": "10000000000000000000000000000007",
         "question": [
-          "How many license plates were captured per state in the last 7 days?"
+          "Which store generated the most critical alerts this week, and what were the top 3 rules that fired?"
         ]
       },
       {
-        "id": "01f15abcc3ec1e0f854b3bbc7003e47a",
+        "id": "10000000000000000000000000000008",
         "question": [
-          "Compare pipeline_frames throughput per camera over the last day."
+          "What is each store's camera uptime in the last 24 hours, ranked worst to best?"
         ]
       },
       {
-        "id": "01f15abcc3ed14f2a984ec45081837c8",
+        "id": "10000000000000000000000000000009",
         "question": [
-          "Which stores generated the most critical alerts in the past week?"
+          "Which cameras spent the most time fogged or obscured in the last 24 hours?"
         ]
       },
       {
-        "id": "01f15abcc3ed1b32a42863544255ba38",
+        "id": "1000000000000000000000000000000a",
         "question": [
-          "What are the top 5 most common detection labels overall?"
+          "Which stores had banned-person face matches in the last week, and at what times?"
+        ]
+      },
+      {
+        "id": "1000000000000000000000000000000b",
+        "question": [
+          "Which refrigeration units are running hot? Show any device that's been above 80F for more than 2 hours in the last day."
+        ]
+      },
+      {
+        "id": "1000000000000000000000000000000c",
+        "question": [
+          "How often did pizza stock drop below 25% in the last 24 hours, by store?"
+        ]
+      },
+      {
+        "id": "1000000000000000000000000000000d",
+        "question": [
+          "What's the average truck-parking fill percentage by hour of day across all stores in the last 12 hours?"
+        ]
+      },
+      {
+        "id": "1000000000000000000000000000000e",
+        "question": [
+          "What's the detection mix (label share) across the fleet today?"
+        ]
+      },
+      {
+        "id": "1000000000000000000000000000000f",
+        "question": [
+          "Which detection label has the lowest average confidence in the last 24 hours? This tells us where the model is struggling."
+        ]
+      },
+      {
+        "id": "10000000000000000000000000000010",
+        "question": [
+          "Give me a single-table ranking of every store this week with: vehicle detections, person detections, alerts, plates captured, and average camera uptime."
         ]
       }
     ]
   },
   "data_sources": {
     "tables": [
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.alerts"},
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.camera_status"},
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.detections"},
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.license_plates"},
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.pipeline_frames"},
-      {"identifier": "reggie_pierce_7405614800873570.pizza_vision.stores"}
+      {
+        "identifier": "retail_consumer_goods.lens_iq.alerts",
+        "description": [
+          "Rule-engine alerts emitted by the LensIQ Jolt subsystem. Severity is critical (P1, refrigeration / safety), warning (P2), or info. acknowledged=true means an operator has triaged it."
+        ],
+        "column_configs": [
+          {
+            "column_name": "acknowledged",
+            "description": [
+              "Whether an operator has acknowledged the alert."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique alert id."
+            ]
+          },
+          {
+            "column_name": "message",
+            "description": [
+              "Human-readable alert text."
+            ]
+          },
+          {
+            "column_name": "rule_id",
+            "description": [
+              "Rule identifier (e.g. temperature_critical, pizza_low_stock, camera_offline, vehicle_dwell_long)."
+            ]
+          },
+          {
+            "column_name": "severity",
+            "description": [
+              "critical | warning | info. Treat critical as P1."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store associated with the alert."
+            ]
+          },
+          {
+            "column_name": "store_name",
+            "description": [
+              "Denormalized store display name (matches stores.name)."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp when the rule fired."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.camera_status",
+        "description": [
+          "Per-hour online/offline samples for every camera in the fleet. Each store has 3 cameras; ~576 rows per day total. Use for uptime questions."
+        ],
+        "column_configs": [
+          {
+            "column_name": "camera_id",
+            "description": [
+              "Camera identifier in the format <store_id>-CAM-<NN>."
+            ]
+          },
+          {
+            "column_name": "online",
+            "description": [
+              "true when the camera was reachable in that hour, false when offline."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the camera belongs to."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC hour stamp."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.detections",
+        "description": [
+          "Per-frame YOLO detections from every camera in the fleet. One row per detected object. Use label='vehicle' for traffic, label='person' for guests, label='truck' for delivery / forecourt trucks, label='pizza' for hot-hold, label='package' for curbside pickup. Confidence is 0-1."
+        ],
+        "column_configs": [
+          {
+            "column_name": "bbox",
+            "description": [
+              "Bounding box as [x1, y1, x2, y2] integer pixels in the source frame."
+            ]
+          },
+          {
+            "column_name": "class_id",
+            "description": [
+              "COCO class id (2=vehicle, 0=person, 7=truck, 84=package, 53=pizza)."
+            ]
+          },
+          {
+            "column_name": "confidence",
+            "description": [
+              "Model confidence 0.0 to 1.0. Filter out < 0.5 for executive answers unless the user asks for low-confidence detections."
+            ]
+          },
+          {
+            "column_name": "frame_id",
+            "description": [
+              "Source video frame the detection came from."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique detection id."
+            ]
+          },
+          {
+            "column_name": "label",
+            "description": [
+              "Class label: vehicle | truck | person | pizza | package."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store where the detection was captured. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp when the detection was emitted."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.device_readings",
+        "description": [
+          "Hourly time series of temperature + humidity readings per device for the last 7 days."
+        ],
+        "column_configs": [
+          {
+            "column_name": "device_id",
+            "description": [
+              "Device this reading belongs to. Joins to devices.id."
+            ]
+          },
+          {
+            "column_name": "humidity",
+            "description": [
+              "Relative humidity 0-100."
+            ]
+          },
+          {
+            "column_name": "status",
+            "description": [
+              "Threshold-derived status at this reading: normal | warning | critical."
+            ]
+          },
+          {
+            "column_name": "temperature",
+            "description": [
+              "Reading in degrees Fahrenheit. >80F is warning, >90F is critical."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the reading."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.devices",
+        "description": [
+          "Refrigeration / IoT devices, one per store. Current temperature and status snapshot."
+        ],
+        "column_configs": [
+          {
+            "column_name": "current_temp",
+            "description": [
+              "Latest temperature reading in Fahrenheit."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Device identifier."
+            ]
+          },
+          {
+            "column_name": "last_update",
+            "description": [
+              "When the device last reported."
+            ]
+          },
+          {
+            "column_name": "location",
+            "description": [
+              "City, state of the device."
+            ]
+          },
+          {
+            "column_name": "name",
+            "description": [
+              "Friendly device label, usually the store name."
+            ]
+          },
+          {
+            "column_name": "status",
+            "description": [
+              "Threshold-derived status: normal (<80F) | warning (80-90F) | critical (>90F)."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.face_matches",
+        "description": [
+          "Live write-back from the LensIQ Facial Recognition page. One row per matched face above the cosine-similarity threshold (0.45). role is banned | vip | staff. Use for security / VIP recognition / staff-time-on-floor questions."
+        ],
+        "column_configs": [
+          {
+            "column_name": "face_id",
+            "description": [
+              "Enrolled face id this match was attached to."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique match id."
+            ]
+          },
+          {
+            "column_name": "name",
+            "description": [
+              "Person's enrolled name."
+            ]
+          },
+          {
+            "column_name": "role",
+            "description": [
+              "banned | vip | staff."
+            ]
+          },
+          {
+            "column_name": "similarity",
+            "description": [
+              "Cosine similarity 0.0 to 1.0. Higher is a stronger match."
+            ]
+          },
+          {
+            "column_name": "source_id",
+            "description": [
+              "Camera / feed source id."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the match happened at. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the match."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.fog_observations",
+        "description": [
+          "Live write-back from the LensIQ Camera Health page. Per-tick observation of how fogged / obscured each camera lens is. area_pct is 0-100 (% of frame fogged); >= 25 is treated as fogged. Use for cleaning / preventive-maintenance questions."
+        ],
+        "column_configs": [
+          {
+            "column_name": "area_pct",
+            "description": [
+              "Percent of frame fogged (0-100). >= 25 is concerning."
+            ]
+          },
+          {
+            "column_name": "camera_label",
+            "description": [
+              "Friendly camera label (Forecourt, Drive-thru, Entrance, etc.)."
+            ]
+          },
+          {
+            "column_name": "fogged",
+            "description": [
+              "true when the lens condition crossed the fog threshold for that tick."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique observation id."
+            ]
+          },
+          {
+            "column_name": "region_count",
+            "description": [
+              "Number of distinct fog regions detected in the frame."
+            ]
+          },
+          {
+            "column_name": "source_id",
+            "description": [
+              "Camera / feed source id."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the camera belongs to. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.guest_counts",
+        "description": [
+          "Live write-back from the LensIQ Guests page. Each row is one person-count sample for a defined zone (entrance, forecourt, drive_thru, register, aisle). Rows land within ~2 seconds of the booth click. Use for guest-traffic and pump-to-store conversion questions."
+        ],
+        "column_configs": [
+          {
+            "column_name": "id",
+            "description": [
+              "Unique sample id."
+            ]
+          },
+          {
+            "column_name": "person_count",
+            "description": [
+              "Number of distinct persons detected in the zone at that tick."
+            ]
+          },
+          {
+            "column_name": "source_id",
+            "description": [
+              "Camera or video feed source the count came from."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the count applies to. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the sample."
+            ]
+          },
+          {
+            "column_name": "zone",
+            "description": [
+              "Zone label (entrance, forecourt, drive_thru, register, aisle)."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.inventory",
+        "description": [
+          "Pizza hot-hold stock and truck-parking fill samples taken every 30 minutes for the first 4 stores. item='pizza' is percent of capacity stocked (lower is a problem); item='truck_parking' is percent of lot occupied."
+        ],
+        "column_configs": [
+          {
+            "column_name": "item",
+            "description": [
+              "Either 'pizza' or 'truck_parking'."
+            ]
+          },
+          {
+            "column_name": "percentage",
+            "description": [
+              "0-100 percent. For pizza: stock remaining. For truck_parking: lot fill."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the sample was taken at."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the inventory sample."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.license_plates",
+        "description": [
+          "Drive-thru / forecourt license plate captures from the lensiq-license-plate Roboflow endpoint. Plate text is partially masked (last chars redacted) - good for state/dwell analytics, not for individual lookups."
+        ],
+        "column_configs": [
+          {
+            "column_name": "confidence",
+            "description": [
+              "OCR confidence 0.0 to 1.0."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique capture id."
+            ]
+          },
+          {
+            "column_name": "plate_masked",
+            "description": [
+              "Plate text with the final characters redacted (e.g. 'ABC***') for privacy."
+            ]
+          },
+          {
+            "column_name": "state",
+            "description": [
+              "Two-letter US state abbreviation extracted from the plate."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store where the plate was seen."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the plate capture."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.pipeline_frames",
+        "description": [
+          "Gold layer of the Lakeflow Spark Declarative Pipeline. One row per deduped frame produced by the inbox volume + YOLO endpoint, with the parsed detections array. Use this for end-to-end CV throughput questions (frames/sec, detections/frame)."
+        ],
+        "column_configs": [
+          {
+            "column_name": "bucket_ts",
+            "description": [
+              "10-second bucket the frame was deduped into."
+            ]
+          },
+          {
+            "column_name": "camera",
+            "description": [
+              "Camera id extracted from the inbox path."
+            ]
+          },
+          {
+            "column_name": "detections",
+            "description": [
+              "Array of {label, class_id, confidence, bbox} produced by the YOLO endpoint."
+            ]
+          },
+          {
+            "column_name": "detector_error",
+            "description": [
+              "Non-null when the YOLO call failed for this row."
+            ]
+          },
+          {
+            "column_name": "file_name",
+            "description": [
+              "Source frame filename."
+            ]
+          },
+          {
+            "column_name": "frame_ts",
+            "description": [
+              "Original frame modification timestamp."
+            ]
+          },
+          {
+            "column_name": "num_detections",
+            "description": [
+              "Convenience count of detections in this frame (0 when null)."
+            ]
+          },
+          {
+            "column_name": "pipeline_ts",
+            "description": [
+              "When the pipeline emitted this row."
+            ]
+          },
+          {
+            "column_name": "size_bytes",
+            "description": [
+              "Source frame size in bytes."
+            ]
+          },
+          {
+            "column_name": "source_path",
+            "description": [
+              "UC volume path of the original frame."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.plate_reads",
+        "description": [
+          "Live write-back from the LensIQ License Plates page. One row per successful OCR with the full extracted plate text (not masked). Pair with license_plates for the masked / privacy-safe view."
+        ],
+        "column_configs": [
+          {
+            "column_name": "confidence",
+            "description": [
+              "OCR confidence 0.0 to 1.0."
+            ]
+          },
+          {
+            "column_name": "detection_confidence",
+            "description": [
+              "Vehicle-detection confidence for the source frame, when available."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique read id."
+            ]
+          },
+          {
+            "column_name": "ocr_model",
+            "description": [
+              "Serving endpoint that produced the OCR (e.g. databricks-claude-opus-4-7)."
+            ]
+          },
+          {
+            "column_name": "plate_text",
+            "description": [
+              "Full plate text in uppercase, no spaces or punctuation."
+            ]
+          },
+          {
+            "column_name": "source_id",
+            "description": [
+              "Camera / video feed the plate was captured from."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the read happened at. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp of the read."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.spill_cycles",
+        "description": [
+          "Live write-back from the LensIQ Spills page. One row per completed spill -> cone response cycle. response_ms is the wall-clock time between the first spill detection and the first cone-placement detection. Lower is better; target is < 60000 (1 minute)."
+        ],
+        "column_configs": [
+          {
+            "column_name": "cone_first_ts",
+            "description": [
+              "UTC timestamp of the first cone-placement detection in the cycle."
+            ]
+          },
+          {
+            "column_name": "id",
+            "description": [
+              "Unique cycle id."
+            ]
+          },
+          {
+            "column_name": "response_ms",
+            "description": [
+              "Spill -> cone response time in milliseconds. Target is < 60000 (1 minute)."
+            ]
+          },
+          {
+            "column_name": "source_id",
+            "description": [
+              "Camera / feed source the cycle came from."
+            ]
+          },
+          {
+            "column_name": "spill_first_ts",
+            "description": [
+              "UTC timestamp of the first spill detection in the cycle."
+            ]
+          },
+          {
+            "column_name": "store_id",
+            "description": [
+              "Store the cycle happened at. Joins to stores.id."
+            ]
+          },
+          {
+            "column_name": "ts",
+            "description": [
+              "UTC timestamp when the cycle completed (cone went down)."
+            ]
+          },
+          {
+            "column_name": "was_assisted",
+            "description": [
+              "true when an operator was prompted by the system, false when the response was unassisted."
+            ]
+          }
+        ]
+      },
+      {
+        "identifier": "retail_consumer_goods.lens_iq.stores",
+        "description": [
+          "The 8 fixed LensIQ store locations. Join target for every other table - always surface stores.name instead of raw store_id in answers."
+        ],
+        "column_configs": [
+          {
+            "column_name": "id",
+            "description": [
+              "Store identifier with the pattern S-<city3>-<NNN>, e.g. S-ATL-001. Foreign key for store_id in every other table."
+            ]
+          },
+          {
+            "column_name": "lat",
+            "description": [
+              "Store latitude (decimal degrees)."
+            ]
+          },
+          {
+            "column_name": "lng",
+            "description": [
+              "Store longitude (decimal degrees)."
+            ]
+          },
+          {
+            "column_name": "location",
+            "description": [
+              "City, state of the store."
+            ]
+          },
+          {
+            "column_name": "name",
+            "description": [
+              "Human-readable store name. Use this in answers."
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "instructions": {
+    "text_instructions": [
+      {
+        "id": "20000000000000000000000000000001",
+        "content": [
+          "You are the LensIQ Operations analyst for an 8-store fleet of QSR / convenience-store / gas-station locations. ",
+          "Every table in this space is produced by computer-vision pipelines (per-frame YOLO + Claude vision detectors) ",
+          "or by the LensIQ app's live write-backs. Tables live in `retail_consumer_goods.lens_iq`. ",
+          "Domain primer: ",
+          "(1) The fleet is fixed at 8 stores. `stores.id` follows the pattern S-<city3>-<NNN> (e.g. S-ATL-001). ",
+          "Always join on `store_id` and surface `stores.name` to the user instead of raw ids. ",
+          "(2) Detections carry one of five labels: `vehicle` (drive-thru / forecourt cars), `truck` (forecourt or delivery), ",
+          "`person` (guests + staff), `pizza` (in-store hot-hold), `package` (curbside / delivery pickups). ",
+          "When a user asks about traffic, default to label='vehicle'. When they ask about guests, default to label='person'. ",
+          "(3) All timestamps are UTC. 'This week' = last 7 days. 'Today' = last 24 hours. 'Right now' = last 15 minutes. ",
+          "(4) `confidence` is 0.0 to 1.0 (display as percent rounded to 0 decimals). ",
+          "Filter out detections with confidence < 0.5 for executive answers unless the user asks otherwise. ",
+          "(5) `severity` on alerts is one of `critical`, `warning`, `info`. Treat `critical` as P1. ",
+          "(6) `inventory.item` is either `pizza` (% of hot-hold capacity stocked; lower = problem) or `truck_parking` (% of lot occupied). ",
+          "(7) `device_readings.temperature` is degrees Fahrenheit. Refrigeration goes critical above 90F. ",
+          "(8) Live write-back tables (`guest_counts`, `plate_reads`, `fog_observations`, `spill_cycles`, `face_matches`) ",
+          "are produced by the LensIQ AppKit app every time someone runs the booth demo. They land in this catalog ",
+          "within ~2 seconds of the click in the UI, so 'recent' rows reflect live demo activity. Seeded baseline data ",
+          "is pre-loaded so questions return useful results even before the booth opens. ",
+          "Answer rules: ",
+          "(a) Always join detection / alert / plate / camera tables to `stores` so the response carries human-readable store names. ",
+          "(b) Prefer GROUP BY rollups + ORDER BY ... LIMIT for executive answers; only return raw rows when the user asks for a list. ",
+          "(c) For 'over time' questions, bucket by hour (`DATE_TRUNC('hour', ts)`) for windows <= 3 days and by day otherwise. ",
+          "(d) When the answer is a single number, also report the comparison vs the prior equal-length window. ",
+          "(e) If the user mentions 'my fleet' or 'the chain' without a store filter, aggregate across all 8 stores. ",
+          "(f) Use `pipeline_frames` for end-to-end CV throughput when it has rows; use `detections` for analytics on what was seen."
+        ]
+      }
+    ],
+    "example_question_sqls": [
+      {
+        "id": "30000000000000000000000000000001",
+        "question": [
+          "Vehicle detections per store: today vs yesterday"
+        ],
+        "sql": [
+          "WITH today AS (\n",
+          "  SELECT d.store_id, COUNT(*) AS detections\n",
+          "  FROM retail_consumer_goods.lens_iq.detections d\n",
+          "  WHERE d.label = 'vehicle' AND d.ts >= NOW() - INTERVAL 24 HOURS\n",
+          "  GROUP BY d.store_id\n",
+          "),\n",
+          "yesterday AS (\n",
+          "  SELECT d.store_id, COUNT(*) AS detections\n",
+          "  FROM retail_consumer_goods.lens_iq.detections d\n",
+          "  WHERE d.label = 'vehicle'\n",
+          "    AND d.ts >= NOW() - INTERVAL 48 HOURS\n",
+          "    AND d.ts <  NOW() - INTERVAL 24 HOURS\n",
+          "  GROUP BY d.store_id\n",
+          ")\n",
+          "SELECT\n",
+          "  s.name AS store,\n",
+          "  COALESCE(t.detections, 0) AS detections_today,\n",
+          "  COALESCE(y.detections, 0) AS detections_yesterday,\n",
+          "  COALESCE(t.detections, 0) - COALESCE(y.detections, 0) AS delta\n",
+          "FROM retail_consumer_goods.lens_iq.stores s\n",
+          "LEFT JOIN today t     ON t.store_id = s.id\n",
+          "LEFT JOIN yesterday y ON y.store_id = s.id\n",
+          "ORDER BY detections_today DESC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000002",
+        "question": [
+          "Busiest hour of day across the fleet (vehicle detections, last 7 days)"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  HOUR(d.ts) AS hour_of_day,\n",
+          "  COUNT(*)   AS vehicle_detections\n",
+          "FROM retail_consumer_goods.lens_iq.detections d\n",
+          "WHERE d.label = 'vehicle'\n",
+          "  AND d.ts >= NOW() - INTERVAL 7 DAYS\n",
+          "GROUP BY HOUR(d.ts)\n",
+          "ORDER BY hour_of_day"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000003",
+        "question": [
+          "Pump-to-store conversion rate this week"
+        ],
+        "sql": [
+          "WITH metrics AS (\n",
+          "  SELECT\n",
+          "    d.store_id,\n",
+          "    COUNT_IF(d.label = 'vehicle') AS vehicles,\n",
+          "    COUNT_IF(d.label = 'person')  AS persons\n",
+          "  FROM retail_consumer_goods.lens_iq.detections d\n",
+          "  WHERE d.ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY d.store_id\n",
+          ")\n",
+          "SELECT\n",
+          "  s.name      AS store,\n",
+          "  m.vehicles,\n",
+          "  m.persons,\n",
+          "  ROUND(m.persons / NULLIF(m.vehicles, 0) * 100, 1) AS pump_to_store_pct\n",
+          "FROM metrics m\n",
+          "JOIN retail_consumer_goods.lens_iq.stores s ON s.id = m.store_id\n",
+          "ORDER BY pump_to_store_pct DESC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000004",
+        "question": [
+          "Average spill -> cone response time and slowest store, last 24 hours"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  s.name AS store,\n",
+          "  COUNT(*) AS spill_cycles,\n",
+          "  ROUND(AVG(c.response_ms) / 1000.0, 1) AS avg_response_seconds,\n",
+          "  ROUND(MAX(c.response_ms) / 1000.0, 1) AS slowest_seconds\n",
+          "FROM retail_consumer_goods.lens_iq.spill_cycles c\n",
+          "LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = c.store_id\n",
+          "WHERE c.ts >= NOW() - INTERVAL 24 HOURS\n",
+          "GROUP BY s.name\n",
+          "ORDER BY avg_response_seconds DESC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000005",
+        "question": [
+          "Plate captures by state, this week vs last week"
+        ],
+        "sql": [
+          "WITH this_week AS (\n",
+          "  SELECT state, COUNT(*) AS plates\n",
+          "  FROM retail_consumer_goods.lens_iq.license_plates\n",
+          "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY state\n",
+          "),\n",
+          "last_week AS (\n",
+          "  SELECT state, COUNT(*) AS plates\n",
+          "  FROM retail_consumer_goods.lens_iq.license_plates\n",
+          "  WHERE ts >= NOW() - INTERVAL 14 DAYS AND ts < NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY state\n",
+          ")\n",
+          "SELECT\n",
+          "  COALESCE(t.state, l.state) AS state,\n",
+          "  COALESCE(t.plates, 0)      AS this_week,\n",
+          "  COALESCE(l.plates, 0)      AS last_week,\n",
+          "  COALESCE(t.plates, 0) - COALESCE(l.plates, 0) AS delta\n",
+          "FROM this_week t\n",
+          "FULL OUTER JOIN last_week l ON t.state = l.state\n",
+          "ORDER BY this_week DESC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000006",
+        "question": [
+          "Plates seen at multiple stores in the last 7 days"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  plate_masked,\n",
+          "  COUNT(DISTINCT store_id) AS stores_visited,\n",
+          "  COUNT(*)                 AS total_captures,\n",
+          "  COLLECT_SET(store_id)    AS store_ids\n",
+          "FROM retail_consumer_goods.lens_iq.license_plates\n",
+          "WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "GROUP BY plate_masked\n",
+          "HAVING stores_visited > 1\n",
+          "ORDER BY stores_visited DESC, total_captures DESC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000007",
+        "question": [
+          "Top firing rules at the store with the most critical alerts this week"
+        ],
+        "sql": [
+          "WITH worst AS (\n",
+          "  SELECT store_id, COUNT(*) AS critical_count\n",
+          "  FROM retail_consumer_goods.lens_iq.alerts\n",
+          "  WHERE severity = 'critical' AND ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY store_id\n",
+          "  ORDER BY critical_count DESC\n",
+          "  LIMIT 1\n",
+          ")\n",
+          "SELECT\n",
+          "  s.name AS store,\n",
+          "  a.rule_id,\n",
+          "  COUNT(*) AS fires\n",
+          "FROM retail_consumer_goods.lens_iq.alerts a\n",
+          "JOIN retail_consumer_goods.lens_iq.stores s ON s.id = a.store_id\n",
+          "JOIN worst w ON w.store_id = a.store_id\n",
+          "WHERE a.severity = 'critical' AND a.ts >= NOW() - INTERVAL 7 DAYS\n",
+          "GROUP BY s.name, a.rule_id\n",
+          "ORDER BY fires DESC\n",
+          "LIMIT 3"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000008",
+        "question": [
+          "Camera uptime per store, last 24 hours, ranked worst to best"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  s.name                                AS store,\n",
+          "  ROUND(AVG(CASE WHEN c.online THEN 100.0 ELSE 0.0 END), 1) AS uptime_pct,\n",
+          "  COUNT(*)                              AS samples\n",
+          "FROM retail_consumer_goods.lens_iq.camera_status c\n",
+          "JOIN retail_consumer_goods.lens_iq.stores s ON s.id = c.store_id\n",
+          "WHERE c.ts >= NOW() - INTERVAL 24 HOURS\n",
+          "GROUP BY s.name\n",
+          "ORDER BY uptime_pct ASC"
+        ]
+      },
+      {
+        "id": "30000000000000000000000000000009",
+        "question": [
+          "Cameras spending the most time fogged in the last 24 hours"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  s.name                          AS store,\n",
+          "  f.camera_label,\n",
+          "  ROUND(AVG(f.area_pct), 1)       AS avg_fogged_area_pct,\n",
+          "  COUNT_IF(f.fogged)              AS fogged_ticks,\n",
+          "  COUNT(*)                        AS total_ticks,\n",
+          "  ROUND(100.0 * COUNT_IF(f.fogged) / COUNT(*), 1) AS pct_of_time_fogged\n",
+          "FROM retail_consumer_goods.lens_iq.fog_observations f\n",
+          "LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = f.store_id\n",
+          "WHERE f.ts >= NOW() - INTERVAL 24 HOURS\n",
+          "GROUP BY s.name, f.camera_label\n",
+          "ORDER BY pct_of_time_fogged DESC"
+        ]
+      },
+      {
+        "id": "3000000000000000000000000000000a",
+        "question": [
+          "Banned-person matches in the last 7 days"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  s.name AS store,\n",
+          "  fm.ts,\n",
+          "  fm.name AS person,\n",
+          "  fm.role,\n",
+          "  ROUND(fm.similarity, 3) AS similarity\n",
+          "FROM retail_consumer_goods.lens_iq.face_matches fm\n",
+          "LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = fm.store_id\n",
+          "WHERE fm.role = 'banned' AND fm.ts >= NOW() - INTERVAL 7 DAYS\n",
+          "ORDER BY fm.ts DESC"
+        ]
+      },
+      {
+        "id": "3000000000000000000000000000000b",
+        "question": [
+          "Refrigeration units that ran hot in the last 24 hours"
+        ],
+        "sql": [
+          "SELECT\n",
+          "  d.id        AS device,\n",
+          "  d.name      AS device_name,\n",
+          "  d.location,\n",
+          "  ROUND(AVG(r.temperature), 1) AS avg_temp_f,\n",
+          "  ROUND(MAX(r.temperature), 1) AS peak_temp_f,\n",
+          "  COUNT_IF(r.temperature > 80) AS hot_hours\n",
+          "FROM retail_consumer_goods.lens_iq.devices d\n",
+          "JOIN retail_consumer_goods.lens_iq.device_readings r ON r.device_id = d.id\n",
+          "WHERE r.ts >= NOW() - INTERVAL 24 HOURS\n",
+          "GROUP BY d.id, d.name, d.location\n",
+          "HAVING hot_hours >= 2\n",
+          "ORDER BY peak_temp_f DESC"
+        ]
+      },
+      {
+        "id": "3000000000000000000000000000000c",
+        "question": [
+          "Single-table fleet ranking this week"
+        ],
+        "sql": [
+          "WITH dets AS (\n",
+          "  SELECT store_id,\n",
+          "         COUNT_IF(label = 'vehicle') AS vehicles,\n",
+          "         COUNT_IF(label = 'person')  AS persons\n",
+          "  FROM retail_consumer_goods.lens_iq.detections\n",
+          "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY store_id\n",
+          "),\n",
+          "plates AS (\n",
+          "  SELECT store_id, COUNT(*) AS plates\n",
+          "  FROM retail_consumer_goods.lens_iq.license_plates\n",
+          "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY store_id\n",
+          "),\n",
+          "alerts_w AS (\n",
+          "  SELECT store_id, COUNT(*) AS alerts\n",
+          "  FROM retail_consumer_goods.lens_iq.alerts\n",
+          "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY store_id\n",
+          "),\n",
+          "uptime AS (\n",
+          "  SELECT store_id, ROUND(AVG(CASE WHEN online THEN 100.0 ELSE 0.0 END), 1) AS camera_uptime_pct\n",
+          "  FROM retail_consumer_goods.lens_iq.camera_status\n",
+          "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
+          "  GROUP BY store_id\n",
+          ")\n",
+          "SELECT\n",
+          "  s.name AS store,\n",
+          "  COALESCE(dets.vehicles, 0)   AS vehicle_detections,\n",
+          "  COALESCE(dets.persons,  0)   AS person_detections,\n",
+          "  COALESCE(plates.plates, 0)   AS plates_captured,\n",
+          "  COALESCE(alerts_w.alerts, 0) AS alerts,\n",
+          "  COALESCE(uptime.camera_uptime_pct, 0) AS camera_uptime_pct\n",
+          "FROM retail_consumer_goods.lens_iq.stores s\n",
+          "LEFT JOIN dets      ON dets.store_id     = s.id\n",
+          "LEFT JOIN plates    ON plates.store_id   = s.id\n",
+          "LEFT JOIN alerts_w  ON alerts_w.store_id = s.id\n",
+          "LEFT JOIN uptime    ON uptime.store_id   = s.id\n",
+          "ORDER BY vehicle_detections DESC"
+        ]
+      }
     ]
   }
 }

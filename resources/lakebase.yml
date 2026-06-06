@@ -1,0 +1,28 @@
+# Lakebase Autoscaling project for app-side persistent state.
+#
+# Creating the project auto-provisions:
+#   - branch: projects/lens-iq/branches/production
+#   - endpoint (compute): .../endpoints/primary  (read-write, 1 CU min/max,
+#     scale-to-zero after 5 min idle)
+#   - database: .../databases/databricks_postgres  (the standard PG-level
+#     database name on a fresh Autoscaling branch)
+#
+# The app binding in resources/app.yml therefore points at
+# `databricks_postgres` instead of a workspace-specific db-* id. AppKit's
+# lakebase plugin creates its schemas (app_data) on first run; the deploy
+# script's grant-lakebase-schema.sh step opens that schema to PUBLIC so any
+# future SP rotation keeps working.
+#
+# `pg_version: 17` is the current default. `purge_on_delete: false` keeps
+# data from being silently destroyed when the bundle is removed - the
+# project lingers until an operator deletes it explicitly.
+resources:
+  postgres_projects:
+    lensiq_postgres:
+      project_id: lens-iq
+      display_name: LensIQ
+      pg_version: 17
+      purge_on_delete: false
+      default_endpoint_settings:
+        autoscaling_limit_min_cu: 0.5
+        autoscaling_limit_max_cu: 1.0

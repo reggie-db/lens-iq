@@ -1,14 +1,21 @@
-# Declarative Unity Catalog volumes owned by this bundle.
+# Declarative Unity Catalog volumes owned by this bundle. All four volumes
+# live under `${var.catalog}.${var.schema}` so swapping workspaces is just a
+# value change in databricks.yml.
 #
-# `frames` and `frames_inbox` are NOT declared here. They predate the bundle,
-# carry user-generated and pipeline-emitted data, and are managed out-of-band
-# (the seed notebook and the SDP pipeline create them as needed). DABs only
-# binds them to the app for permission grants - see resources/app.yml.
-#
-# `sample_videos` is bundle-owned: it's a deterministic read-only mirror of
-# client/public/sample-videos/, and we want `databricks bundle deploy` to
-# (re-)create it idempotently. The actual bytes are uploaded by
-# scripts/sync-sample-videos.sh (called from scripts/deploy.sh).
+# - sample_videos      Demo MP4s mirrored from client/public/sample-videos/.
+#                      Bytes uploaded by scripts/sync-sample-videos.sh after
+#                      the bundle creates the volume.
+# - presenter_content  Booth talk track markdown + HTML deck served at runtime
+#                      so the narrative can be refreshed without redeploying.
+#                      Bytes uploaded by scripts/sync-presenter-content.sh.
+# - frames             Detection write-back: the app uploads frame JPEGs here
+#                      when a detection lands so the UI can fetch the source
+#                      image for the bbox overlay. Pipeline reads here too.
+# - frames_inbox       Continuous-detection pipeline's input volume. The
+#                      pipeline_simulator notebook drops JPEGs into this
+#                      volume; the Spark Declarative Pipeline picks them up
+#                      via Auto Loader and writes structured detections back
+#                      into the `pipeline_frames` table.
 resources:
   volumes:
     sample_videos:
@@ -17,15 +24,21 @@ resources:
       name: sample_videos
       volume_type: MANAGED
       comment: Demo MP4s streamed to the lens-iq app via the AppKit files plugin.
-    # Booth-presenter content: the talk-track markdown and the standalone HTML
-    # deck. Mirrors `docs/dais-talk-track.md` and `docs/booth-deck.html` from
-    # the repo. The app reads from this volume at runtime so the narrative
-    # can be refreshed without redeploying. scripts/sync-presenter-content.sh
-    # pushes the bytes here; the volume itself is bundle-owned so
-    # `databricks bundle deploy` (re-)creates it idempotently.
     presenter_content:
       catalog_name: ${var.catalog}
       schema_name: ${var.schema}
       name: presenter_content
       volume_type: MANAGED
       comment: Booth talk-track markdown and HTML deck served by the LensIQ app at runtime.
+    frames:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: frames
+      volume_type: MANAGED
+      comment: App-written detection JPEGs (one file per persisted detection).
+    frames_inbox:
+      catalog_name: ${var.catalog}
+      schema_name: ${var.schema}
+      name: frames_inbox
+      volume_type: MANAGED
+      comment: Lakeflow pipeline input - Auto Loader watches this volume for new JPEGs.

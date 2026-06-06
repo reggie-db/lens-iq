@@ -14,6 +14,9 @@ resources:
       resources:
         - name: warehouse
           sql_warehouse:
+            # Resolves through `var.warehouse_id` which defaults to the
+            # bundle-owned lensiq_warehouse (see resources/warehouse.yml).
+            # Override at deploy time to point at an existing warehouse.
             id: ${var.warehouse_id}
             permission: CAN_USE
         - name: llm
@@ -28,29 +31,24 @@ resources:
           serving_endpoint:
             name: ${var.detector_endpoint}
             permission: CAN_QUERY
-        - name: license_plate
-          serving_endpoint:
-            name: ${var.license_plate_endpoint}
-            permission: CAN_QUERY
         # spill + wet_floor_sign are served by Claude on the shared
         # `llm` endpoint above (see server/vision-detector.ts), so no
         # dedicated resource binding is needed for either one.
-        - name: cigarette_vape
-          serving_endpoint:
-            name: ${var.cigarette_vape_endpoint}
-            permission: CAN_QUERY
-        - name: slip_fall
-          serving_endpoint:
-            name: ${var.slip_fall_endpoint}
-            permission: CAN_QUERY
         - name: fog_detector
           serving_endpoint:
             name: ${var.fog_detector_endpoint}
             permission: CAN_QUERY
-        - name: face_recognition
-          serving_endpoint:
-            name: ${var.face_recognition_endpoint}
-            permission: CAN_QUERY
+        # face_recognition endpoint binding is commented out by default
+        # because the InsightFace buffalo_l zip extraction in the deploy
+        # notebook is flaky on serverless compute. To enable: fix
+        # notebooks/deploy_face_recognition.ipynb's _stage_buffalo_l()
+        # function, deploy the endpoint via `databricks bundle run
+        # lensiq_deploy_face_recognition`, then uncomment this binding
+        # and re-deploy.
+        # - name: face_recognition
+        #   serving_endpoint:
+        #     name: ${var.face_recognition_endpoint}
+        #     permission: CAN_QUERY
         # LensIQ Detections Genie space. Commented out until the chat
         # surface in the app wires this through. The space itself lives
         # in resources/genie_space_lensiq_detections.json and is created
@@ -60,17 +58,6 @@ resources:
         #   genie_space:
         #     space_id: ${var.genie_space_id}
         #     permission: CAN_RUN
-        - name: portr_token
-          # Portr client secret used by scripts/start.sh when the public
-          # tunnel is opted in via PUBLIC_DOMAIN (see app.yaml). The
-          # plaintext token is held in the Databricks secret store and
-          # surfaced to the app as the PORTR_TOKEN env var. To disable the
-          # tunnel entirely, drop both this resource binding AND the
-          # PUBLIC_DOMAIN / PORTR_TOKEN entries in app.yaml.
-          secret:
-            scope: ${var.apps_tunnel_secret_scope}
-            key: ${var.apps_tunnel_secret_key}
-            permission: READ
         - name: postgres
           # Lakebase Autoscaling Postgres backing app-side persistent state
           # (guest_counts written from the Guests page, fog_observations from
@@ -83,6 +70,10 @@ resources:
           # (which is the legacy Lakebase Provisioned shape and was emitting
           # "unknown field: name" warnings before this fix).
           postgres:
+            # Project + production branch are bundle-owned
+            # (resources/lakebase.yml). Database defaults to
+            # `databricks_postgres` (the standard Autoscaling default that
+            # the project auto-creates on first provision).
             branch: projects/lens-iq/branches/production
             database: projects/lens-iq/branches/production/databases/${var.lakebase_database}
             permission: CAN_CONNECT_AND_CREATE

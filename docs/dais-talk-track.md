@@ -467,9 +467,6 @@ these out when the badge in front of you matches.
 - **PPE / hard hat (`hard_hat`).** Detects helmet compliance on
   back-of-house or industrial lines. Weekly coaching trend, not a
   punitive write-up. Manufacturing, distribution, fuel back-of-house.
-- **Cigarette / vape (`cigarette_vape`).** Loss-prevention model for
-  age-gated areas in a c-store. Flags activity near the counter so the
-  manager can intervene without watching the camera live.
 
 The talk track for these is identical to spill: it's a model on its own
 endpoint, every detection lands in Delta and Lakebase, Genie can ask
@@ -794,7 +791,6 @@ is the operator path, Zerobus is the on-ramp.
 | Facial Recognition | `face_recognition` | `lensiq-face-recognition`  | InsightFace `buffalo_l` (SCRFD + ArcFace 512-d) + pgvector match in Lakebase |
 | Live (specialty)   | `slip_fall`        | `lensiq-slip-fall`         | Standing vs fallen person                                     |
 | Live (specialty)   | `hard_hat`         | (on-demand)                | PPE compliance                                                |
-| Live (specialty)   | `cigarette_vape`   | `lensiq-cigarette-vape`    | Age-gated area loss-prevention                                |
 
 Each endpoint is independently versioned, owned, and billed. Adding a new
 use case is one notebook (`notebooks/deploy_*.ipynb`) plus one row in

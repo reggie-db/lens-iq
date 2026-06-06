@@ -1,0 +1,9 @@
+# UC schema for everything LensIQ writes / reads via the analytics + files +
+# lakebase plugins. Bundle-owned so a fresh deploy creates it idempotently.
+# Catalog + schema names are bundle variables (see databricks.yml).
+resources:
+  schemas:
+    lensiq_schema:
+      catalog_name: ${var.catalog}
+      name: ${var.schema}
+      comment: Demo tables, frame volumes, and synced data for the LensIQ app.
