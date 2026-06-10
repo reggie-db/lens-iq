@@ -1,63 +1,21 @@
-import { useCallback, useState } from "react";
-import { useServingInvoke } from "@databricks/appkit-ui/react";
+import { useState } from "react";
 import {
-  Button, Card, CardContent, CardHeader, CardTitle,
-  Sheet, SheetContent, SheetTrigger, Textarea,
+  Button, GenieChat,
+  Sheet, SheetContent, SheetTrigger,
 } from "@databricks/appkit-ui/react";
-import { Loader2, MessageCircle, Sparkles } from "lucide-react";
+import { MessageCircle, Sparkles } from "lucide-react";
 import { ApertureIcon } from "./LensIQLogo";
 
-// Floating chat button that opens a sheet with a textbox. The textbox posts the
-// message to the configured LLM via /api/serving/llm/invoke through AppKit.
-// We use the foundation-model chat completion shape: { messages: [...] }.
+// Floating chat button that opens a sheet hosting the AppKit <GenieChat>
+// component. GenieChat talks to the LensIQ Detections Genie space via the
+// genie() plugin (server/server.ts), so questions are answered against the
+// live UC tables instead of a free-text LLM. The `default` alias matches the
+// space the plugin registers from DATABRICKS_GENIE_SPACE_ID.
 
-interface ChatMessage {
-  role: "user" | "assistant";
-  content: string;
-}
-
-interface InvokeShape extends Record<string, unknown> {
-  messages: ChatMessage[];
-}
-
-const SYSTEM_PROMPT = `You are a helpful assistant for the LensIQ dashboard.
-The dashboard monitors quick-serve restaurants using computer vision: temperature
-sensors, license plate detection, object detection (vehicles, people, pizza,
-trucks), and inventory tracking. Keep responses short and pragmatic.`;
+const GENIE_ALIAS = "default";
 
 export function AIChatButton() {
-  const [draft, setDraft] = useState("");
-  const [history, setHistory] = useState<ChatMessage[]>([]);
   const [open, setOpen] = useState(false);
-
-  const body: InvokeShape = {
-    messages: [
-      { role: "assistant", content: SYSTEM_PROMPT },
-      ...history,
-    ],
-  };
-
-  const { invoke, loading, error } = useServingInvoke(body, { alias: "llm" });
-
-  const send = useCallback(async () => {
-    const userText = draft.trim();
-    if (!userText || loading) return;
-
-    const next: ChatMessage[] = [...history, { role: "user", content: userText }];
-    setHistory(next);
-    setDraft("");
-
-    const result = await invoke({
-      messages: [
-        { role: "assistant", content: SYSTEM_PROMPT },
-        ...next,
-      ],
-    } satisfies InvokeShape);
-
-    if (!result) return;
-    const responseText = _extractMessage(result);
-    setHistory((prev) => [...prev, { role: "assistant", content: responseText }]);
-  }, [draft, history, invoke, loading]);
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
@@ -65,86 +23,27 @@ export function AIChatButton() {
         <Button
           className="fixed bottom-6 right-6 rounded-full w-14 h-14 shadow-lg"
           aria-label="Open AI chat"
+          data-kiosk="genie"
         >
           <MessageCircle className="w-6 h-6" />
         </Button>
       </SheetTrigger>
-      <SheetContent side="right" className="w-[400px] sm:w-[480px] flex flex-col">
-        <Card className="flex-1 flex flex-col border-0 shadow-none">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ApertureIcon size={20} title="LensIQ" />
-              <span>
-                Ask <span style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}>LensIQ</span>
-              </span>
-              <Sparkles className="w-4 h-4 text-lava-600" />
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col gap-3 overflow-hidden">
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
-              {history.length === 0 && (
-                <p className="text-sm text-slate-500">
-                  Ask about temperatures, alerts, license plate trends, detection counts, or
-                  inventory levels. Powered by Databricks Model Serving.
-                </p>
-              )}
-              {history.map((m, i) => (
-                <div key={i} className={m.role === "user" ? "text-right" : "text-left"}>
-                  <div className={
-                    "inline-block max-w-[85%] rounded-lg px-3 py-2 text-sm " +
-                    (m.role === "user"
-                      ? "bg-lava-600 text-white"
-                      : "bg-slate-100 text-slate-900")
-                  }>
-                    {m.content}
-                  </div>
-                </div>
-              ))}
-              {loading && (
-                <div className="flex items-center gap-2 text-sm text-slate-500">
-                  <Loader2 className="w-4 h-4 animate-spin" /> Thinking...
-                </div>
-              )}
-              {error && <div className="text-sm text-destructive">{error}</div>}
-            </div>
-
-            <div className="flex gap-2">
-              <Textarea
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void send();
-                  }
-                }}
-                placeholder="Ask a question..."
-                rows={2}
-                disabled={loading}
-              />
-              <Button onClick={() => void send()} disabled={loading || !draft.trim()}>
-                Send
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+      <SheetContent side="right" className="w-[400px] sm:w-[480px] flex flex-col gap-3">
+        <div className="flex items-center gap-2 font-semibold">
+          <ApertureIcon size={20} title="LensIQ" />
+          <span>
+            Ask <span style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}>LensIQ</span>
+          </span>
+          <Sparkles className="w-4 h-4 text-lava-600" />
+        </div>
+        <div className="flex-1 min-h-0">
+          <GenieChat
+            alias={GENIE_ALIAS}
+            placeholder="Ask about temperatures, alerts, plates, detections, or inventory..."
+            className="h-full"
+          />
+        </div>
       </SheetContent>
     </Sheet>
   );
-}
-
-// Foundation-model chat completion responses come back in OpenAI shape. Fall
-// back to common alternatives for robustness.
-function _extractMessage(result: unknown): string {
-  if (result && typeof result === "object") {
-    const obj = result as Record<string, unknown>;
-    const choices = obj.choices as Array<Record<string, unknown>> | undefined;
-    const firstMsg = choices?.[0]?.message as Record<string, unknown> | undefined;
-    const content = firstMsg?.content;
-    if (typeof content === "string") return content;
-    if (typeof obj.output === "string") return obj.output;
-    if (typeof obj.response === "string") return obj.response;
-    if (typeof obj.text === "string") return obj.text;
-  }
-  return "(empty response)";
 }

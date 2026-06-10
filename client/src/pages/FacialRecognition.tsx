@@ -250,7 +250,7 @@ export function FacialRecognitionPage({ isActive }: FacialRecognitionPageProps) 
           />
         </div>
 
-        <div className="lg:col-span-2 space-y-6">
+        <div className="lg:col-span-2 space-y-6" data-kiosk="face-matches">
           <FaceMatchFeed isActive={isActive} enrolled={enrolled} />
           <RecentMatchesCard
             rows={recent}

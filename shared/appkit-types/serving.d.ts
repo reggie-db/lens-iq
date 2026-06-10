@@ -5,7 +5,7 @@ import "@databricks/appkit-ui/react";
 
 declare module "@databricks/appkit" {
   interface ServingEndpointRegistry {
-    llm: {
+    default: {
       request: {
         messages?: {
           role?: "user" | "assistant";
@@ -56,42 +56,13 @@ declare module "@databricks/appkit" {
         id?: string;
         created?: number;
       };
-    };
-    detector: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    license_plate: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
-    };
-    slip_fall: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
-    };
-    fog_detector: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    face_recognition: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
     };
   }
 }
 
 declare module "@databricks/appkit-ui/react" {
   interface ServingEndpointRegistry {
-    llm: {
+    default: {
       request: {
         messages?: {
           role?: "user" | "assistant";
@@ -142,35 +113,6 @@ declare module "@databricks/appkit-ui/react" {
         id?: string;
         created?: number;
       };
-    };
-    detector: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    license_plate: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
-    };
-    slip_fall: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
-    };
-    fog_detector: {
-      request: Record<string, unknown>;
-      response: {
-        predictions?: Record<string, unknown>[];
-      };
-      chunk: unknown;
-    };
-    face_recognition: {
-      request: Record<string, unknown>;
-      response: unknown;
-      chunk: unknown;
     };
   }
 }

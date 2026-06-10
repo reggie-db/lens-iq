@@ -1,13 +1,14 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import {
-  Activity, Bell, BookOpen, Camera, Car, CloudFog, Cone, Cpu, Database, LayoutDashboard,
-  Menu, Package, Pizza, PlayCircle, Presentation, ScanFace, TrendingUp, Upload, Users, Video,
-  Workflow,
+  Activity, Bell, BookOpen, Camera, Car, ChevronDown, CloudFog, Cone, Cpu, Database,
+  LayoutDashboard, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
+  TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
-  Badge, Button, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
+  Badge, Button, ButtonGroup, Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@databricks/appkit-ui/react";
 import { OverviewPage } from "./pages/Overview";
 import { DevicesPage } from "./pages/Devices";
@@ -31,6 +32,7 @@ import { AIChatButton } from "./components/AIChatButton";
 import { GlobalLoadingBar } from "./components/GlobalLoadingBar";
 import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
 import { TourProvider, useTour } from "./lib/tour";
+import { KioskProvider, useKiosk } from "./lib/kiosk";
 import "./lib/queries";
 
 type Role = "Admin" | "Store Manager";
@@ -74,6 +76,7 @@ function NavButton({ view, label, icon: Icon, activeView, onNavigate, hidden }: 
       variant={activeView === view ? "default" : "ghost"}
       className="w-full justify-start gap-2"
       onClick={() => onNavigate(view)}
+      data-nav={view}
     >
       <Icon className="w-4 h-4 shrink-0" />
       <span className="truncate">{label}</span>
@@ -84,14 +87,19 @@ function NavButton({ view, label, icon: Icon, activeView, onNavigate, hidden }: 
 interface NavItemsProps {
   activeView: string;
   userRole: Role;
+  presenterMode: boolean;
   onItemClick?: () => void;
 }
 
-function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
+function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItemsProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const handle = (view: string) => {
     if (userRole === "Store Manager" && RESTRICTED_VIEWS.includes(view)) return;
-    navigate(`/${view}`);
+    // Preserve the current query string (e.g. ?presenterMode=true) so the
+    // presenter-only Talk Track / Booth Deck links stay visible while
+    // navigating around the app.
+    navigate(`/${view}${location.search}`);
     onItemClick?.();
   };
   const restricted = (v: string) => userRole === "Store Manager" && RESTRICTED_VIEWS.includes(v);
@@ -125,36 +133,75 @@ function NavItems({ activeView, userRole, onItemClick }: NavItemsProps) {
       <NavButton view="devices"    label="All Devices"   icon={Cpu}             activeView={activeView} onNavigate={handle} />
       <NavButton view="search"     label="Data Search"   icon={Database}        activeView={activeView} onNavigate={handle} hidden={restricted("search")} />
 
-      <div className="my-2 border-t border-slate-200" />
-      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Reference</div>
-      <NavButton view="info"       label="Talk Track"    icon={BookOpen}        activeView={activeView} onNavigate={handle} />
-      <NavButton view="deck"       label="Booth Deck"    icon={Presentation}    activeView={activeView} onNavigate={handle} />
+      {/* Talk Track + Booth Deck are presenter-only: hidden unless the URL
+          carries ?presenterMode=true (see usePresenterMode in AppShell). */}
+      {presenterMode && (
+        <>
+          <div className="my-2 border-t border-slate-200" />
+          <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Reference</div>
+          <NavButton view="info"       label="Talk Track"    icon={BookOpen}        activeView={activeView} onNavigate={handle} />
+          <NavButton view="deck"       label="Booth Deck"    icon={Presentation}    activeView={activeView} onNavigate={handle} />
+        </>
+      )}
     </nav>
   );
 }
 
-// Header button that kicks off the guided tour. Lives inside <TourProvider>
-// so it can call useTour().
-function TourLauncher() {
+// Header split control. Lives inside <KioskProvider> + <TourProvider>.
+// Primary button toggles the hands-free, visual-only Kiosk loop (also
+// auto-startable via ?kiosk=true). The dropdown caret launches the manual
+// guided Tour (presenter tips), turning the kiosk off first so the two
+// overlays never fight.
+function DemoLauncher() {
+  const { armed, toggle, disarm } = useKiosk();
   const { start } = useTour();
+  const variant = armed ? "default" : "outline";
+  const launchTour = () => {
+    disarm();
+    start();
+  };
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      className="gap-2"
-      onClick={start}
-      title="Walk through the demo with talk-track commentary"
-    >
-      <PlayCircle className="w-4 h-4" />
-      <span className="hidden sm:inline">Tour</span>
-    </Button>
+    <ButtonGroup>
+      <Button
+        variant={variant}
+        size="sm"
+        className="gap-2"
+        onClick={toggle}
+        title={
+          armed
+            ? "Kiosk demo is on - click to stop"
+            : "Run the hands-free booth loop that drives itself around the app"
+        }
+      >
+        {armed ? (
+          <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+        ) : (
+          <MonitorPlay className="w-4 h-4" />
+        )}
+        <span className="hidden sm:inline">Kiosk</span>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant={variant} size="sm" aria-label="More demo modes">
+            <ChevronDown className="w-4 h-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onClick={launchTour} className="gap-2">
+            <PlayCircle className="w-4 h-4" /> Guided tour
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </ButtonGroup>
   );
 }
 
 export default function App() {
   return (
     <TourProvider>
-      <AppShell />
+      <KioskProvider>
+        <AppShell />
+      </KioskProvider>
     </TourProvider>
   );
 }
@@ -165,6 +212,12 @@ function AppShell() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
+
+  // Presenter mode gates the booth-only Talk Track (/info) and Booth Deck
+  // (/deck) surfaces. Driven purely by the ?presenterMode=true query param so
+  // it's shareable and stateless; NavItems preserves the query string across
+  // navigation so the links stay visible once enabled.
+  const presenterMode = new URLSearchParams(location.search).get("presenterMode") === "true";
 
   // Single-page app shell:
   //   - The viewport itself never scrolls. We pin to h-screen + overflow-hidden
@@ -184,7 +237,7 @@ function AppShell() {
           <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
         </div>
         <div className="flex-1 p-4 overflow-y-auto overscroll-contain">
-          <NavItems activeView={activeView} userRole={userRole} />
+          <NavItems activeView={activeView} userRole={userRole} presenterMode={presenterMode} />
         </div>
       </aside>
 
@@ -207,6 +260,7 @@ function AppShell() {
                       <NavItems
                         activeView={activeView}
                         userRole={userRole}
+                        presenterMode={presenterMode}
                         onItemClick={() => setDrawerOpen(false)}
                       />
                     </div>
@@ -237,7 +291,7 @@ function AppShell() {
               </div>
 
               <div className="flex items-center gap-4">
-                <TourLauncher />
+                <DemoLauncher />
 
                 <Select value={userRole} onValueChange={(v) => setUserRole(v as Role)}>
                   <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
@@ -275,8 +329,10 @@ function AppShell() {
             <Route path="/pizza-inventory" element={<PizzaInventoryPage isActive={activeView === "pizza-inventory"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
-            <Route path="/info" element={<InfoPage />} />
-            <Route path="/deck" element={<DeckPage />} />
+            {/* Presenter-only routes: direct hits without ?presenterMode=true
+                bounce back to the dashboard. */}
+            <Route path="/info" element={presenterMode ? <InfoPage /> : <Navigate to="/overview" replace />} />
+            <Route path="/deck" element={presenterMode ? <DeckPage /> : <Navigate to="/overview" replace />} />
           </Routes>
         </main>
 

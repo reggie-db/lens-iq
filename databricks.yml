@@ -85,16 +85,18 @@ variables:
     description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
     default: databricks-claude-opus-4-7
   # ─── Genie space ───────────────────────────────────────────────────────
-  # ID of the "LensIQ Detections" Genie space backing the in-app chat
-  # surface. DABs does not yet declare genie_spaces, so the space is
-  # (re-)created by scripts/deploy.sh from the serialized config at
-  # resources/genie_space_lensiq_detections.json, then this var is
-  # auto-populated in `.databricks/state/genie_space_id` and consumed by the
-  # app via the GENIE_SPACE_ID env var. The bundle var only exists so future
-  # DABs releases that add genie space binding can wire it up declaratively.
+  # ID of the "LensIQ Detections" Genie space backing the "Ask LensIQ" chat
+  # (AppKit genie() plugin + <GenieChat>). DABs does not yet declare
+  # genie_spaces, so the space is (re-)created by scripts/deploy.sh from the
+  # serialized config at resources/genie_space_lensiq_detections.json, which
+  # caches the id in `.databricks/state/genie_space_id`. The app reads the id
+  # from the DATABRICKS_GENIE_SPACE_ID env var (app.yaml); this bundle var
+  # feeds the `genie_space` resource binding in resources/app.yml that grants
+  # the app SP CAN_RUN. deploy.sh passes the cached state id via --var on
+  # re-deploys; this default is the fallback for a plain `bundle deploy`.
   genie_space_id:
     description: Genie space ID created by scripts/deploy.sh from resources/genie_space_lensiq_detections.json.
-    default: ""
+    default: "01f1648d45ec15bebd112142c2c897db"
   # ─── Serving endpoint names ────────────────────────────────────────────
   # One endpoint per use case so each detector has its own UC registered
   # model, scale-to-zero schedule, workload size, and version history.

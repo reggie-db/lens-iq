@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
-import { analytics, createApp, files, lakebase, serving, server, sql } from "@databricks/appkit";
+import { analytics, createApp, files, genie, lakebase, serving, server, sql } from "@databricks/appkit";
 import { z } from "zod";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
@@ -605,9 +605,16 @@ const AppKit = await createApp({
           slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
           fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
           face_recognition: { env: "DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION" },
-        }).filter(([, cfg]) => Boolean(process.env[cfg.env])),
+        }      ).filter(([, cfg]) => Boolean(process.env[cfg.env])),
       ),
     }),
+    // LensIQ Detections Genie space backs the "Ask LensIQ" chat. The plugin
+    // reads DATABRICKS_GENIE_SPACE_ID and registers it under the `default`
+    // alias, which client/src/components/AIChatButton.tsx renders via
+    // <GenieChat alias="default" />. Only register when the space id is set so
+    // the app still boots in environments without a Genie space; the chat
+    // button surfaces the missing-alias error from the plugin if it's absent.
+    ...(process.env.DATABRICKS_GENIE_SPACE_ID ? [genie()] : []),
     files({
       // Volumes are reached as the app service principal. The DAB declares
       // the required READ/WRITE_VOLUME grants via `app.resources` in

@@ -154,6 +154,22 @@ else
   FORCE_LOCK_FLAG=()
 fi
 
+# The app's `genie_space` resource binding (resources/app.yml) references
+# ${var.genie_space_id}, and the bundle deploy (step 1) runs before the Genie
+# space is ensured (step 6). Feed the cached state id as --var so the binding
+# tracks the deployed space on re-deploys; if no state file exists yet the
+# databricks.yml default is used.
+if [[ -f ".databricks/state/genie_space_id" ]]; then
+  _genie_id="$(cat .databricks/state/genie_space_id 2>/dev/null || true)"
+  if [[ -n "$_genie_id" ]]; then
+    DEPLOY_VAR_FLAG=(--var "genie_space_id=${_genie_id}")
+  else
+    DEPLOY_VAR_FLAG=()
+  fi
+else
+  DEPLOY_VAR_FLAG=()
+fi
+
 # `${arr[@]+"${arr[@]}"}` is the bash workaround for `set -u` complaining
 # about expanding an empty array. Use it everywhere we splat TARGET_FLAG.
 _databricks() {
@@ -195,7 +211,7 @@ _deploy_bundle() {
   log_file="$(mktemp -t dais-deploy.XXXXXX)"
   local rc=0
   set +e
-  _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} 2>&1 | tee "$log_file"
+  _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} ${DEPLOY_VAR_FLAG[@]+"${DEPLOY_VAR_FLAG[@]}"} 2>&1 | tee "$log_file"
   rc=${PIPESTATUS[0]}
   set -e
   if [[ "$rc" -eq 0 ]]; then
@@ -208,7 +224,7 @@ _deploy_bundle() {
     _databricks bundle deployment bind "$_BUNDLE_APP_KEY" "$_WORKSPACE_APP_NAME" \
       ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} --auto-approve
     _log "  retrying bundle deploy after bind"
-    _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"}
+    _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} ${DEPLOY_VAR_FLAG[@]+"${DEPLOY_VAR_FLAG[@]}"}
     return 0
   fi
   rm -f "$log_file"

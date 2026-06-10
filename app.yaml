@@ -14,6 +14,16 @@ env:
     value: reggie_pierce_dais_catalog
   - name: DATABRICKS_SCHEMA
     value: lens_iq
+  # ─── Genie space ─────────────────────────────────────────────────────
+  # Backs the "Ask LensIQ" chat via the AppKit genie() plugin. The plugin
+  # reads this env var and registers the space under the `default` alias
+  # (see server/server.ts and client/src/components/AIChatButton.tsx). The
+  # app SP gets CAN_RUN on the space via the `genie_space` resource binding
+  # in resources/app.yml. Literal here for the same reason as catalog/schema
+  # above: DABs only interpolates bundle vars inside app.yaml on newer CLIs.
+  # KEEP IN SYNC with databricks.yml::variables.genie_space_id.
+  - name: DATABRICKS_GENIE_SPACE_ID
+    value: 01f1648d45ec15bebd112142c2c897db
   # ─── Public tunnel (opt-in) ──────────────────────────────────────────
   # scripts/start.sh installs portr and registers a tunnel only when
   # PUBLIC_DOMAIN is set. The leftmost label of PUBLIC_DOMAIN becomes the

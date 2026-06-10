@@ -136,3 +136,57 @@ body {
 .talk-track a:hover {
   color: #ff3621;
 }
+
+/* ── Kiosk mode (client/src/lib/kiosk.tsx) ───────────────────────────────
+   Hands-free booth loop: an animated cursor glides to a nav item, a click
+   ripple fires, and the relevant section glows. All purely visual cues. */
+
+/* Caption dwell bar: fills over the per-stop duration. Inline animation +
+   a per-stop React key restart the fill on every stop (see KioskOverlay). */
+@keyframes kioskDwell {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
+/* The fake cursor. Glides between coordinates via a top/left transition so a
+   passer-by sees deliberate "navigation" motion, not teleporting. */
+.kiosk-cursor {
+  transition: top 1.5s cubic-bezier(0.4, 0, 0.2, 1),
+              left 1.5s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 2;
+}
+
+/* Click ripple: a ring that expands and fades on each simulated click. */
+.kiosk-ripple {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 9999px;
+  border: 2px solid #ff3621;
+  animation: kioskRipple 0.9s ease-out forwards;
+}
+@keyframes kioskRipple {
+  from { transform: scale(0.4); opacity: 0.9; }
+  to   { transform: scale(3.4); opacity: 0; }
+}
+
+/* Section highlight: a soft glowing ring that pulses around the live UI,
+   never a dimmer, so the page stays fully visible underneath. */
+.kiosk-highlight {
+  outline: 2px solid rgba(255, 54, 33, 0.9);
+  outline-offset: 0;
+  box-shadow: 0 0 0 4px rgba(255, 54, 33, 0.18),
+              0 0 28px 6px rgba(255, 54, 33, 0.35);
+  transition: top 0.25s ease-out, left 0.25s ease-out,
+              width 0.25s ease-out, height 0.25s ease-out;
+  animation: kioskGlow 1.8s ease-in-out infinite;
+}
+@keyframes kioskGlow {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(255, 54, 33, 0.18),
+                         0 0 22px 4px rgba(255, 54, 33, 0.28); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 54, 33, 0.26),
+                         0 0 34px 8px rgba(255, 54, 33, 0.45); }
+}
