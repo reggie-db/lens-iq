@@ -7,6 +7,17 @@ resources:
       name: lens-iq
       description: LensIQ - computer vision dashboard for QSR / gas stations / convenience stores.
       source_code_path: ../
+      # Match the live app's existing compute size so DABs's update
+      # payload has a value for the same `compute_size` slot that ends
+      # up in update_mask. Without this every `bundle deploy` 400s with
+      # `compute_min_instances must be provided when included in
+      # update_mask`. MEDIUM is the workspace default at create time
+      # (verified via `databricks apps get lens-iq -o json`). Do NOT add
+      # compute_min_instances / compute_max_instances here - this
+      # workspace returns "Manual instance count configuration is not
+      # enabled" for any pinned-instance request; the platform handles
+      # autoscaling implicitly.
+      compute_size: MEDIUM
       # No `user_api_scopes` - everything in the app runs as the SP. UC,
       # serving, and warehouse grants are all on the SP via the `resources:`
       # bindings below; the OAuth user token is never used for downstream
@@ -38,17 +49,19 @@ resources:
           serving_endpoint:
             name: ${var.fog_detector_endpoint}
             permission: CAN_QUERY
-        # face_recognition endpoint binding is commented out by default
-        # because the InsightFace buffalo_l zip extraction in the deploy
-        # notebook is flaky on serverless compute. To enable: fix
-        # notebooks/deploy_face_recognition.ipynb's _stage_buffalo_l()
-        # function, deploy the endpoint via `databricks bundle run
-        # lensiq_deploy_face_recognition`, then uncomment this binding
-        # and re-deploy.
-        # - name: face_recognition
-        #   serving_endpoint:
-        #     name: ${var.face_recognition_endpoint}
-        #     permission: CAN_QUERY
+        # InsightFace buffalo_l detector + 512-d ArcFace embedder.
+        # Deployed by `databricks bundle run lensiq_deploy_face_recognition`
+        # (notebooks/deploy_face_recognition.ipynb). The stage step is
+        # idempotent + retries with ONNX validation, so the old "flaky"
+        # warning no longer applies. Pair with DEPLOY_FACE_RECOGNITION=1
+        # in .env so scripts/deploy.sh runs the deploy job automatically;
+        # phase 2 of deploy.sh already drops this binding if the endpoint
+        # didn't come up, so leaving it on is safe even on workspaces
+        # where the deploy job is skipped.
+        - name: face_recognition
+          serving_endpoint:
+            name: ${var.face_recognition_endpoint}
+            permission: CAN_QUERY
         # LensIQ Detections Genie space. Commented out until the chat
         # surface in the app wires this through. The space itself lives
         # in resources/genie_space_lensiq_detections.json and is created

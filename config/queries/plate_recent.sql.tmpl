@@ -5,7 +5,7 @@
 -- displays plausible relative times.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM retail_consumer_goods.lens_iq.license_plates
+    FROM ${catalog}.${schema}.license_plates
 )
 SELECT
     p.id,
@@ -17,7 +17,7 @@ SELECT
         " min ago"
     ) AS time,
     CAST(ROUND(p.confidence * 100, 0) AS INT) AS confidence
-FROM retail_consumer_goods.lens_iq.license_plates p, anchor a
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = p.store_id
+FROM ${catalog}.${schema}.license_plates p, anchor a
+LEFT JOIN ${catalog}.${schema}.stores s ON s.id = p.store_id
 ORDER BY p.ts DESC
 LIMIT :max_rows

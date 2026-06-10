@@ -60,14 +60,16 @@ variables:
   # volumes, the presenter content volume, and the Lakebase schema name.
   # The catalog must exist in the target workspace (catalog creation is
   # workspace-admin work that's intentionally not in the bundle). DABs
-  # creates the schema and volumes under it. Server-side code and SQL
-  # queries read DATABRICKS_CATALOG / DATABRICKS_SCHEMA at runtime (set in
-  # app.yaml from these defaults), so swapping workspaces is: change these
-  # two values + scripts/swap-uc.sh to rewrite the file-based queries that
-  # DABs can't reach.
+  # creates the schema and volumes under it. Server-side code and the
+  # app's file-based analytics queries (config/queries/*.sql.tmpl, rendered
+  # at boot by server/uc.ts) read DATABRICKS_CATALOG / DATABRICKS_SCHEMA at
+  # runtime (set in app.yaml from these defaults), so swapping workspaces is:
+  # change these two values + scripts/swap-uc.sh to rewrite the remaining
+  # static files (notebooks, Genie JSON, .env, app.yaml) that DABs can't
+  # reach.
   catalog:
     description: Existing Unity Catalog catalog name. Must already exist in the target workspace.
-    default: retail_consumer_goods
+    default: reggie_pierce_dais_catalog
   schema:
     description: Schema for demo tables and the frame volume (created by the bundle).
     default: lens_iq
@@ -79,8 +81,6 @@ variables:
   # permission on most shared workspaces).
   warehouse_id:
     description: SQL Warehouse used by the analytics plugin and Genie space.
-    lookup:
-      warehouse: retail_consumer_goods_wh
   llm_endpoint:
     description: Model serving endpoint used for AI chat (must satisfy llm/v1/chat).
     default: databricks-claude-opus-4-7

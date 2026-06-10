@@ -7,8 +7,8 @@ SELECT
     s.name AS store,
     DATE_FORMAT(d.ts, "yyyy-MM-dd'T'HH:mm:ss") AS ts,
     CAST(ROUND(d.confidence * 100, 0) AS INT) AS confidence
-FROM retail_consumer_goods.lens_iq.detections d
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = d.store_id
+FROM ${catalog}.${schema}.detections d
+LEFT JOIN ${catalog}.${schema}.stores s ON s.id = d.store_id
 WHERE :search = "" OR d.label LIKE LOWER(CONCAT("%", :search, "%"))
 ORDER BY d.ts DESC
 LIMIT :max_rows

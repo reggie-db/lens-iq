@@ -2,15 +2,20 @@
 # Rewrite Unity Catalog catalog + schema references across the repo.
 #
 # Bundle YAML resolves `${var.catalog}` / `${var.schema}` from
-# databricks.yml automatically; this script handles everything DABs
+# databricks.yml automatically; this script handles the static files DABs
 # can't reach:
-#   - config/queries/*.sql                 (fully-qualified table refs)
 #   - notebooks/*.ipynb                    (widget defaults)
 #   - resources/genie_space_*.json         (Genie data_sources.tables)
 #   - pipelines/pizza_vision_pipeline.py   (default Spark conf values)
 #   - .env                                 (volume paths + DATABRICKS_CATALOG / DATABRICKS_SCHEMA)
 #   - app.yaml                             (DATABRICKS_CATALOG / DATABRICKS_SCHEMA env values)
 #   - databricks.yml                       (catalog / schema variable defaults)
+#
+# It does NOT touch config/queries/*.sql.tmpl - those carry `${catalog}` /
+# `${schema}` placeholders that server/uc.ts renders at app boot from the
+# DATABRICKS_CATALOG / DATABRICKS_SCHEMA env vars (set in app.yaml from the
+# values this script writes). So for the app's analytics queries, updating
+# .env / app.yaml here is enough; no per-query rewrite is needed.
 #
 # It does NOT touch:
 #   - Bundle resource IDs (e.g. `lens-iq-seed`, `lensiq_deploy_*`).
@@ -84,10 +89,9 @@ _sed -E "s|^DATABRICKS_SCHEMA=.*|DATABRICKS_SCHEMA=${_NEW_SCHEMA}|"             
 _sed -E "/^  - name: DATABRICKS_CATALOG/,/value:/ s|value: ${_current_catalog}|value: ${_NEW_CATALOG}|" app.yaml
 _sed -E "/^  - name: DATABRICKS_SCHEMA/,/value:/  s|value: ${_current_schema}|value: ${_NEW_SCHEMA}|"  app.yaml
 
-# 4. SQL queries (fully-qualified table refs).
-for f in config/queries/*.sql; do
-  _sed -E "s|${_current_catalog}\.${_current_schema}\.|${_NEW_CATALOG}.${_NEW_SCHEMA}.|g" "$f"
-done
+# 4. SQL queries: nothing to do. config/queries/*.sql.tmpl use
+#    `${catalog}` / `${schema}` placeholders rendered at app boot by
+#    server/uc.ts from DATABRICKS_CATALOG / DATABRICKS_SCHEMA (step 3).
 
 # 5. Genie space JSON.
 for f in resources/genie_space_*.json; do

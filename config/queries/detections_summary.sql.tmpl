@@ -6,7 +6,7 @@
 -- the size of "recent" so trend % stays comparable.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM retail_consumer_goods.lens_iq.detections
+    FROM ${catalog}.${schema}.detections
 ),
 window_filter AS (
     SELECT
@@ -21,13 +21,13 @@ window_filter AS (
 ),
 recent AS (
     SELECT label, COUNT(*) AS count
-    FROM retail_consumer_goods.lens_iq.detections, window_filter
+    FROM ${catalog}.${schema}.detections, window_filter
     WHERE ts >= start_ts AND ts <= now_ts
     GROUP BY label
 ),
 prior AS (
     SELECT label, COUNT(*) AS count
-    FROM retail_consumer_goods.lens_iq.detections, window_filter
+    FROM ${catalog}.${schema}.detections, window_filter
     WHERE ts >= start_ts - (now_ts - start_ts)
       AND ts <  start_ts
     GROUP BY label

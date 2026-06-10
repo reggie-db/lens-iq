@@ -25,7 +25,7 @@ from pyspark.sql.types import LongType, StringType
 LOG = logging.getLogger("pizza_vision_pipeline")
 
 # Pipeline parameters (set via the bundle resources/pipeline.yml configuration).
-_CATALOG = spark.conf.get("pizza_vision.catalog", "retail_consumer_goods")
+_CATALOG = spark.conf.get("pizza_vision.catalog", "reggie_pierce_dais_catalog")
 _SCHEMA = spark.conf.get("pizza_vision.schema", "lens_iq")
 _INBOX_PATH = spark.conf.get(
     "pizza_vision.inbox_path",

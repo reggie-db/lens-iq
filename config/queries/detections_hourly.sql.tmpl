@@ -3,12 +3,12 @@
 -- stale.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM retail_consumer_goods.lens_iq.detections
+    FROM ${catalog}.${schema}.detections
 )
 SELECT
     DATE_FORMAT(date_trunc("HOUR", d.ts), "HH:00") AS hour,
     COUNT(*) AS count
-FROM retail_consumer_goods.lens_iq.detections d, anchor a
+FROM ${catalog}.${schema}.detections d, anchor a
 WHERE d.ts >= a.now_ts - INTERVAL 1 DAYS
   AND d.ts <= a.now_ts
 GROUP BY date_trunc("HOUR", d.ts)

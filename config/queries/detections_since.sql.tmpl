@@ -8,7 +8,7 @@ SELECT
     class_id,
     confidence,
     bbox
-FROM retail_consumer_goods.lens_iq.detections
+FROM ${catalog}.${schema}.detections
 WHERE ts > :since
 ORDER BY ts
 LIMIT 200

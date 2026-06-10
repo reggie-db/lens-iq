@@ -63,7 +63,7 @@ workload size can be tuned independently. Endpoint names live in
 | Plugin        | Purpose                                                                     |
 | ------------- | --------------------------------------------------------------------------- |
 | `server()`    | Express + Vite dev / static prod.                                           |
-| `analytics()` | Parameterized SQL from `config/queries/*.sql`, run as the app SP.           |
+| `analytics()` | Parameterized SQL from `config/queries/*.sql.tmpl` (catalog/schema rendered at boot by `server/uc.ts`), run as the app SP. |
 | `serving()`   | One alias per endpoint above. Calls run on-behalf-of the logged-in user.    |
 | `files()`     | UC volume mounts for `frames`, `frames_inbox`, `sample_videos`, `presenter_content`. |
 | `lakebase()`  | OAuth-refreshed Postgres pool. Schema lives in `lensiq.*` on the bound DB.  |
@@ -276,11 +276,14 @@ helper script keeps them in sync:
   `databricks.yml::variables.{catalog,schema}` via `${var.catalog}` /
   `${var.schema}` interpolation. Change the defaults (or pass `--var`
   at deploy time) and every YAML resource follows.
-- **Runtime app code** (server constants, direct `analytics.query()`
-  calls) - reads `DATABRICKS_CATALOG` / `DATABRICKS_SCHEMA` from env.
-  Set in `app.yaml` for deploys, `.env` for local dev.
-- **File-based artifacts that DABs can't see** - `config/queries/*.sql`,
-  `notebooks/*.ipynb` widget defaults, `resources/genie_space_*.json`,
+- **Runtime app code** (server constants in `server/uc.ts`, direct
+  `analytics.query()` calls, and the file-based analytics queries) - reads
+  `DATABRICKS_CATALOG` / `DATABRICKS_SCHEMA` from env. The queries live as
+  `config/queries/*.sql.tmpl` with `${catalog}` / `${schema}` placeholders;
+  `server/uc.ts::renderQueryFiles()` renders them to git-ignored `*.sql` at
+  boot. Set the two env vars in `app.yaml` for deploys, `.env` for local dev.
+- **Static file artifacts that DABs can't see** - `notebooks/*.ipynb`
+  widget defaults, `resources/genie_space_*.json`,
   `pipelines/pizza_vision_pipeline.py` Spark conf defaults. These have
   fully-qualified table refs baked in and need a sed pass.
 
@@ -290,8 +293,10 @@ helper script keeps them in sync:
 scripts/swap-uc.sh --catalog new_catalog --schema new_schema
 ```
 
-It reads the current defaults out of `databricks.yml`, rewrites every
-file in the three layers above, and prints the redeploy command. After
+It reads the current defaults out of `databricks.yml`, rewrites the YAML
+defaults + the static file artifacts above (the analytics queries are
+runtime-parameterized, so they're left alone), and prints the redeploy
+command. After
 running it you still need to do the workspace-side bootstrap (`databricks
 bundle deploy` + the per-detector deploy jobs) before the app can find
 its tables in the new home.
@@ -365,7 +370,7 @@ scope and key are bundle variables
 │   │   ├── components/           Charts, AI chat, global loading bar
 │   │   └── lib/                  query keys, model registry, tour
 │   └── public/sample-videos/     MP4s pushed to the sample_videos volume
-├── config/queries/               One .sql file per analytics query key
+├── config/queries/               One .sql.tmpl per analytics query key (rendered to .sql at boot)
 ├── docs/                         Talk track + booth deck (synced to volume)
 ├── notebooks/                    Seed + per-detector deploy notebooks
 ├── scripts/                      Deploy, start, volume-sync, grant helpers

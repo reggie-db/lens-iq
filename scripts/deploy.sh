@@ -38,7 +38,7 @@
 #      `bundle deploy`. The resolved space id is cached at
 #      .databricks/state/genie_space_id.
 #   7. Run the deploy jobs in dependency order:
-#        lens-iq-seed                         (synthetic data)
+#        lens-iq-seed                         (synthetic data; opt-in via --seed)
 #        pizza_vision_deploy_yolo             (YOLO endpoint)
 #        lensiq_deploy_roboflow_detectors     (license plate + slip/fall)
 #        lensiq_deploy_fog_detector           (Pillow+numpy classifier)
@@ -48,12 +48,21 @@
 # Usage:
 #   scripts/deploy.sh                    # full first-time deploy
 #   scripts/deploy.sh -t dev             # explicit target
-#   scripts/deploy.sh --skip-jobs        # skip step 7 (model deploys)
-#   scripts/deploy.sh --skip-sync        # skip step 4 (volume sync)
-#   scripts/deploy.sh --skip-grants      # skip step 5 (Lakebase grants)
+#   scripts/deploy.sh --seed             # opt in to step 5 (seed job).
+#                                        # Off by default; pass it on a fresh
+#                                        # workspace or to refresh the demo
+#                                        # tables in <catalog>.<schema>.
+#   scripts/deploy.sh --skip-jobs        # skip step 6b (per-detector model
+#                                        # deploys). Does not affect --seed.
+#   scripts/deploy.sh --skip-sync        # skip step 3 (volume sync)
+#   scripts/deploy.sh --skip-grants      # skip step 4 (Lakebase grants)
 #   scripts/deploy.sh --skip-genie       # skip step 6 (Genie space)
-#   scripts/deploy.sh --skip-run         # skip step 8 (`bundle run`)
-#   scripts/deploy.sh --bundle-only      # only run step 2 (`bundle deploy`)
+#   scripts/deploy.sh --skip-run         # skip step 7 (`bundle run`)
+#   scripts/deploy.sh --bundle-only      # only run step 1 (`bundle deploy`)
+#   scripts/deploy.sh --force-lock       # pass --force-lock to the
+#                                        # `bundle deploy` invocation. Use
+#                                        # when a prior run died mid-deploy
+#                                        # and left the bundle lock acquired.
 #
 # Secrets (optional, read from env if set):
 #   ROBOFLOW_API_KEY=...    pushed into lens-iq/roboflow_api_key
@@ -74,8 +83,10 @@ SKIP_SYNC=0
 SKIP_GRANTS=0
 SKIP_GENIE=0
 SKIP_JOBS=0
+RUN_SEED=0
 SKIP_RUN=0
 BUNDLE_ONLY=0
+FORCE_LOCK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -t|--target)   TARGET="$2"; shift 2 ;;
@@ -83,9 +94,11 @@ while [[ $# -gt 0 ]]; do
     --skip-grants) SKIP_GRANTS=1; shift ;;
     --skip-genie)  SKIP_GENIE=1; shift ;;
     --skip-jobs)   SKIP_JOBS=1; shift ;;
+    --seed)        RUN_SEED=1; shift ;;
     --skip-run)    SKIP_RUN=1; shift ;;
     --bundle-only) BUNDLE_ONLY=1; shift ;;
-    -h|--help)     sed -n '2,60p' "$0"; exit 0 ;;
+    --force-lock)  FORCE_LOCK=1; shift ;;
+    -h|--help)     sed -n '2,69p' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)" >&2; exit 2 ;;
   esac
 done
@@ -103,7 +116,7 @@ _fail() { printf "\033[1;31m[deploy]\033[0m %s\n" "$*" >&2; exit 1; }
 # front instead of letting `bundle deploy` fail half-way through.
 _preflight() {
   local catalog="${DATABRICKS_CATALOG:-retail_consumer_goods}"
-  local wh_name="retail_consumer_goods_wh"
+  local wh_name="Serverless Starter Warehouse"
   _log "  pre-flight: catalog=${catalog}, warehouse=${wh_name}"
   if ! databricks catalogs get "$catalog" >/dev/null 2>&1; then
     _warn "  catalog '${catalog}' not found in this workspace."
@@ -130,6 +143,17 @@ else
   LABEL="(default target)"
 fi
 
+# Only `databricks bundle deploy` understands --force-lock. Splat the
+# array into the deploy invocation (and the auto-bind retry inside
+# _deploy_bundle) and nowhere else; passing it to `bundle run` or other
+# CLI commands would 2-exit on an unknown flag.
+if [[ "$FORCE_LOCK" -eq 1 ]]; then
+  FORCE_LOCK_FLAG=(--force-lock)
+  LABEL="${LABEL} --force-lock"
+else
+  FORCE_LOCK_FLAG=()
+fi
+
 # `${arr[@]+"${arr[@]}"}` is the bash workaround for `set -u` complaining
 # about expanding an empty array. Use it everywhere we splat TARGET_FLAG.
 _databricks() {
@@ -144,43 +168,66 @@ _bundle_var() {
     | jq -r ".variables.\"$1\".value // .variables.\"$1\".default // empty"
 }
 
-# ─── 1. Bundle deploy (phase 1: everything except the app) ───────────────
-# The app's resource bindings reference per-detector serving endpoints by
-# name. DABs validates each binding at bundle-deploy time, so on a fresh
-# workspace the app deploy fails until the deploy jobs have created the
-# endpoints (step 6 below). Workaround: swap resources/app.yml with an
-# empty stub for phase 1, restore the real file for phase 2.
+# Bundle resource key (resources/app.yml -> resources.apps.<KEY>) and the
+# workspace-side app name DABs creates from it. Kept as constants because
+# both are stable bundle-internal identifiers - if either drifts,
+# `_deploy_bundle`'s auto-bind branch breaks loudly and we'd notice.
+_BUNDLE_APP_KEY="lens_iq"
+_WORKSPACE_APP_NAME="lens-iq"
+
+# `bundle deploy` with auto-bind on ALREADY_EXISTS.
 #
-# DABs requires every file listed in `include:` to exist on disk, so we
-# can't simply move app.yml aside. The trap restores the original file
-# on any exit so aborted runs leave a clean checkout. Re-running is safe:
-# phase 1 backs up the real file iff it isn't already the stub; phase 2
-# restores from the backup iff one exists.
-APP_YML="resources/app.yml"
-APP_YML_BACKUP="resources/.app.yml.real"
-APP_YML_STUB="# Phase-1 stub written by scripts/deploy.sh. The real app
-# definition is at resources/.app.yml.real and is restored on exit.
-resources: {}
-"
-
-_restore_app_yml() {
-  if [[ -f "$APP_YML_BACKUP" ]]; then
-    mv -f "$APP_YML_BACKUP" "$APP_YML"
+# DABs only knows about a workspace app it created itself. Common cases
+# where the app exists but isn't tracked in the bundle state file:
+#   - A teammate (or an earlier UI experiment) created the app first.
+#   - The bundle state at .databricks/state/<target>/terraform.tfstate
+#     was wiped or never made it to this checkout.
+# In all of these, `bundle deploy` 409's on apps.${_BUNDLE_APP_KEY} with
+# "Failed to create app <name>". The fix is `bundle deployment bind
+# <bundle-key> <workspace-resource-id> --auto-approve`, then retry.
+#
+# Implementation note: we tee deploy output into a temp file so the
+# caller still sees streaming progress AND we can grep the failure
+# afterwards. set +e wraps the call so pipefail doesn't kill us before
+# we get a chance to inspect the exit code.
+_deploy_bundle() {
+  local log_file
+  log_file="$(mktemp -t dais-deploy.XXXXXX)"
+  local rc=0
+  set +e
+  _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} 2>&1 | tee "$log_file"
+  rc=${PIPESTATUS[0]}
+  set -e
+  if [[ "$rc" -eq 0 ]]; then
+    rm -f "$log_file"
+    return 0
   fi
+  if grep -qE "ALREADY_EXISTS.*${_WORKSPACE_APP_NAME}|Failed to create app ${_WORKSPACE_APP_NAME}" "$log_file"; then
+    _log "  detected 409 on apps.${_BUNDLE_APP_KEY} -> binding existing workspace app '${_WORKSPACE_APP_NAME}'"
+    rm -f "$log_file"
+    _databricks bundle deployment bind "$_BUNDLE_APP_KEY" "$_WORKSPACE_APP_NAME" \
+      ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"} --auto-approve
+    _log "  retrying bundle deploy after bind"
+    _databricks bundle deploy ${FORCE_LOCK_FLAG[@]+"${FORCE_LOCK_FLAG[@]}"}
+    return 0
+  fi
+  rm -f "$log_file"
+  return "$rc"
 }
-trap _restore_app_yml EXIT
 
-_log "[1/8] bundle deploy $LABEL (phase 1: schema/volumes/secret-scope/lakebase/jobs/pipeline)"
+# ─── 1. Bundle deploy (schema/volumes/secret-scope/lakebase/jobs/pipeline + app) ──
+# Deploys the whole bundle, including the app, exactly as resources/app.yml
+# is committed - no on-disk app.yml staging or rewriting. The app's resource
+# bindings reference per-detector serving endpoints by name; DABs validates
+# those at deploy time, so this assumes the bound endpoints + secrets already
+# exist in the target workspace (true on a re-deploy). The endpoint deploy
+# jobs (step 6) and `bundle run` (step 7) then refresh models + start the app.
+_log "[1/8] bundle deploy $LABEL (schema/volumes/secret-scope/lakebase/jobs/pipeline + app)"
 _preflight
-if [[ -f "$APP_YML" ]] && ! grep -q "Phase-1 stub written by scripts/deploy.sh" "$APP_YML"; then
-  cp "$APP_YML" "$APP_YML_BACKUP"
-  printf "%s" "$APP_YML_STUB" > "$APP_YML"
-fi
-_databricks bundle deploy
+_deploy_bundle
 
 if [[ "$BUNDLE_ONLY" -eq 1 ]]; then
-  _restore_app_yml
-  _log "bundle-only mode: stopping after phase 1. Re-run without --bundle-only to finish."
+  _log "bundle-only mode: stopping after the bundle deploy. Re-run without --bundle-only to finish."
   exit 0
 fi
 
@@ -225,21 +272,23 @@ else
   _log "[4/8] grants skipped (--skip-grants)"
 fi
 
-# ─── 5. Seed demo tables ─────────────────────────────────────────────────
-# Runs first because both the Genie space (step 6) and the app's analytics
-# pages (step 7) read from these tables. The seed job is parameterized
-# with the bundle catalog/schema vars so it lands in the right place.
+# ─── 5. Seed demo tables (opt-in) ────────────────────────────────────────
+# Off by default - the demo tables persist across deploys, so a re-deploy
+# rarely needs to re-seed. Pass --seed on a fresh workspace (or to refresh
+# the synthetic data); the Genie space (step 6) and the app's analytics
+# pages then read from these tables. The seed job is parameterized with the
+# bundle catalog/schema vars so it lands in the right place.
 _run_job() {
   local job="$1"
   _log "  databricks bundle run ${job} ${LABEL}"
   _databricks bundle run "$job"
 }
 
-if [[ "$SKIP_JOBS" -eq 0 ]]; then
+if [[ "$RUN_SEED" -eq 1 ]]; then
   _log "[5/8] bundle run lens-iq-seed (creates demo tables in ${DATABRICKS_CATALOG:-retail_consumer_goods}.${DATABRICKS_SCHEMA:-lens_iq})"
   _run_job lens-iq-seed
 else
-  _log "[5/8] seed job skipped (--skip-jobs)"
+  _log "[5/8] seed job skipped (pass --seed to run it)"
 fi
 
 # ─── 6. Genie space ──────────────────────────────────────────────────────
@@ -293,10 +342,15 @@ PY
     # sample questions / curated SQL examples / table descriptions take
     # effect on every deploy without manual recreation. update-space does a
     # full replacement of the serialized space content.
+    #
+    # Do NOT pass --title here. `update-space --title X` re-registers the
+    # space's parent-folder node with the new name, which fails with
+    # "Node named 'X' already exists" when X matches the space's current
+    # name (always, in our case). Title is set once at create time and
+    # any rename is a manual operator action; this script never renames.
     _log "  updating existing space ${_existing_id} from ${GENIE_CONFIG}"
     databricks genie update-space "$_existing_id" \
       --serialized-space "$_payload" \
-      --title "LensIQ Detections" \
       --warehouse-id "$WAREHOUSE_ID" \
       --output json >/dev/null
     _log "  updated Genie space ${_existing_id}"
@@ -370,153 +424,15 @@ else
   _log "[6/8] endpoint deploy jobs skipped (--skip-jobs)"
 fi
 
-# ─── 7. Phase 2: bundle deploy WITH the app + start it ──────────────────
-# Now that the per-detector endpoints exist (step 6) and Lakebase + UC
-# resources are in place (step 1), generate a filtered resources/app.yml
-# that drops bindings for endpoints that aren't actually deployed
-# (typically Roboflow-backed ones when ROBOFLOW_API_KEY is missing,
-# or face_recognition when DEPLOY_FACE_RECOGNITION isn't set), then
-# re-run `bundle deploy` so DABs creates/updates the app resource and
-# pushes source. The trap restores the original app.yml on exit, so
-# the committed file always survives a partial deploy intact.
-_filter_app_yml() {
-  [[ -f "$APP_YML_BACKUP" ]] || return 0
-  python3 - "$APP_YML_BACKUP" "$APP_YML" ${TARGET_FLAG[@]+"${TARGET_FLAG[@]}"} <<'PY'
-import json
-import re
-import subprocess
-import sys
-
-src, dst, *target_flags = sys.argv[1:]
-
-# Currently deployed serving endpoints in this workspace.
-result = subprocess.run(
-    ["databricks", "serving-endpoints", "list", "--output", "json"],
-    capture_output=True,
-    text=True,
-)
-endpoints = []
-if result.returncode == 0 and result.stdout.strip():
-    try:
-        endpoints = json.loads(result.stdout)
-    except json.JSONDecodeError:
-        endpoints = []
-ready_names = {e["name"] for e in endpoints if e.get("name")}
-
-# Resolve bundle variable values so we can map binding -> endpoint name.
-bundle = subprocess.run(
-    ["databricks", "bundle", "summary", "--output", "json", *target_flags],
-    capture_output=True,
-    text=True,
-)
-variables = {}
-if bundle.returncode == 0 and bundle.stdout.strip():
-    try:
-        variables = json.loads(bundle.stdout).get("variables", {})
-    except json.JSONDecodeError:
-        variables = {}
-
-def resolve(var_name):
-    v = variables.get(var_name, {}) or {}
-    return v.get("value") or v.get("default") or ""
-
-# Binding name -> bundle variable that holds the endpoint name. Keep
-# `llm` here even though it's a foundation-model endpoint (always
-# present on Databricks) so the filter naturally no-ops on it.
-endpoint_vars = {
-    "llm": "llm_endpoint",
-    "detector": "detector_endpoint",
-    "license_plate": "license_plate_endpoint",
-    "slip_fall": "slip_fall_endpoint",
-    "fog_detector": "fog_detector_endpoint",
-    "face_recognition": "face_recognition_endpoint",
-}
-
-drop = set()
-for binding, var in endpoint_vars.items():
-    name = resolve(var)
-    if name and name not in ready_names:
-        drop.add(binding)
-        print(
-            f"  filtered out app binding '{binding}' (endpoint '{name}' not deployed)",
-            file=sys.stderr,
-        )
-
-# Secret bindings: app deploy fails if the referenced secret key isn't
-# in the scope. portr_token is the obvious case - the operator has to
-# `export PORTR_TOKEN` before deploy or the public-tunnel feature is
-# off, so the binding is skipped. Look up secret existence via
-# `databricks secrets list-secrets` against the resolved scope.
-secret_scope = resolve("secret_scope") or "lens-iq"
-secrets_list = subprocess.run(
-    ["databricks", "secrets", "list-secrets", secret_scope, "--output", "json"],
-    capture_output=True,
-    text=True,
-)
-present_keys = set()
-if secrets_list.returncode == 0 and secrets_list.stdout.strip():
-    try:
-        present_keys = {s.get("key") for s in json.loads(secrets_list.stdout) if s.get("key")}
-    except json.JSONDecodeError:
-        present_keys = set()
-
-secret_bindings = {
-    "portr_token": resolve("apps_tunnel_secret_key") or "portr_token",
-}
-for binding, key in secret_bindings.items():
-    if key and key not in present_keys:
-        drop.add(binding)
-        print(
-            f"  filtered out app binding '{binding}' (secret '{secret_scope}/{key}' not set)",
-            file=sys.stderr,
-        )
-
-with open(src) as f:
-    lines = f.readlines()
-
-# Walk the YAML line-by-line. When we hit `- name: <drop>` we skip the
-# block + every subsequent line that's indented deeper than the `-`.
-# This is safe because YAML list items are flat at one indent and
-# their children sit at indent+2.
-out = []
-i = 0
-binding_re = re.compile(r"^([ \t]+)-\s+name:\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
-while i < len(lines):
-    line = lines[i]
-    m = binding_re.match(line)
-    if m and m.group(2) in drop:
-        block_indent = len(m.group(1))
-        i += 1
-        while i < len(lines):
-            nxt = lines[i]
-            if not nxt.strip():
-                i += 1
-                continue
-            nxt_indent = len(nxt) - len(nxt.lstrip(" \t"))
-            if nxt_indent > block_indent:
-                i += 1
-            else:
-                break
-        continue
-    out.append(line)
-    i += 1
-
-with open(dst, "w") as f:
-    f.writelines(out)
-PY
-}
-
+# ─── 7. Start the app ────────────────────────────────────────────────────
+# The app resource + source were already created/pushed by the bundle deploy
+# in step 1. Now that the per-detector endpoints exist (step 6), start the
+# app so it picks them up.
 if [[ "$SKIP_RUN" -eq 0 ]]; then
-  _log "[7/8] filter app.yml bindings to deployed endpoints"
-  _filter_app_yml
-
-  _log "[7/8] bundle deploy ${LABEL} (phase 2: create/update app resource + push source)"
-  _databricks bundle deploy
-
   _log "[7/8] bundle run lens_iq ${LABEL}"
   _databricks bundle run lens_iq
 else
-  _log "[7/8] app start skipped (--skip-run) - phase 2 bundle deploy also skipped"
+  _log "[7/8] app start skipped (--skip-run)"
 fi
 
 # ─── 8. Done ─────────────────────────────────────────────────────────────

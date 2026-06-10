@@ -11,7 +11,7 @@ env:
   # bundle vars inside app.yaml as of CLI 0.283.0+; treat these as
   # literals you swap when you move workspaces.
   - name: DATABRICKS_CATALOG
-    value: retail_consumer_goods
+    value: reggie_pierce_dais_catalog
   - name: DATABRICKS_SCHEMA
     value: lens_iq
   # ─── Public tunnel (opt-in) ──────────────────────────────────────────

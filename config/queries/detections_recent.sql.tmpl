@@ -4,7 +4,7 @@
 -- of wall clock, so a 6h-old seed still displays sensible relative times.
 WITH anchor AS (
     SELECT MAX(ts) AS now_ts
-    FROM retail_consumer_goods.lens_iq.detections
+    FROM ${catalog}.${schema}.detections
 )
 SELECT
     d.id,
@@ -15,7 +15,7 @@ SELECT
         " min ago"
     ) AS time,
     CAST(ROUND(d.confidence * 100, 0) AS INT) AS confidence
-FROM retail_consumer_goods.lens_iq.detections d, anchor a
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = d.store_id
+FROM ${catalog}.${schema}.detections d, anchor a
+LEFT JOIN ${catalog}.${schema}.stores s ON s.id = d.store_id
 ORDER BY d.ts DESC
 LIMIT :max_rows

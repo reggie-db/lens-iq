@@ -21,6 +21,7 @@ import {
   inlineBlob,
   onceAsync,
 } from "./util.ts";
+import { renderQueryFiles, UC_TABLE } from "./uc.ts";
 
 const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
 const VIDEO_CONTENT_TYPE = "video/mp4";
@@ -94,16 +95,13 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 const POLL_INTERVAL_MS = 2000;
 const SSE_HEARTBEAT_MS = 15_000;
 
-// Unity Catalog target. Resolved from env at module load so swapping
-// workspaces is "set DATABRICKS_CATALOG / DATABRICKS_SCHEMA + restart".
-// Defaults mirror databricks.yml::variables.{catalog,schema}; .env and
-// app.yaml are where the live values come from. Server-side direct SQL
-// (DETECTIONS_SINCE_SQL, the insert below, the per-second poll) all
-// route through UC_TABLE(...) so no literal table identifier is baked
-// into the build.
-const UC_CATALOG = process.env.DATABRICKS_CATALOG ?? "retail_consumer_goods";
-const UC_SCHEMA  = process.env.DATABRICKS_SCHEMA  ?? "lens_iq";
-const UC_TABLE = (name: string) => `${UC_CATALOG}.${UC_SCHEMA}.${name}`;
+// Unity Catalog target (UC_CATALOG / UC_SCHEMA / UC_TABLE) is resolved from
+// env in server/uc.ts so swapping workspaces is "set DATABRICKS_CATALOG /
+// DATABRICKS_SCHEMA + restart". Server-side direct SQL (DETECTIONS_SINCE_SQL,
+// the insert below, the per-second poll) routes through UC_TABLE(...); the
+// analytics plugin's file-based queries are rendered from config/queries/
+// *.sql.tmpl by renderQueryFiles() (called before createApp below). No
+// literal catalog/schema identifier is baked into the build either way.
 const TABLE_DETECTIONS = UC_TABLE("detections");
 const STORE_IDS = [
   "S-ATL-001", "S-ATL-002", "S-DAL-001", "S-HOU-001",
@@ -547,6 +545,11 @@ async function _proxyUpstreamSampleVideo(
   }
   Readable.fromWeb(upstreamRes.body as Parameters<typeof Readable.fromWeb>[0]).pipe(res);
 }
+
+// Render config/queries/*.sql.tmpl -> *.sql with the runtime catalog/schema
+// before the analytics plugin reads any query file from disk. Must run
+// before createApp so the first /api/analytics request hits resolved SQL.
+await renderQueryFiles();
 
 const AppKit = await createApp({
   cache: {
