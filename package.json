@@ -14,9 +14,12 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@databricks/appkit": "^0.35.2",
-    "@databricks/appkit-ui": "^0.35.2",
+    "@databricks/appkit": "^0.41.5",
+    "@databricks/appkit-ui": "^0.41.5",
+    "@dbx-tools/appkit-mastra": "^0.1.48",
+    "@dbx-tools/appkit-mastra-ui": "^0.1.48",
     "@tailwindcss/vite": "^4.1.11",
+    "express": "^5.0.0",
     "lucide-react": "^0.525.0",
     "marked": "^17.0.6",
     "react": "^19.1.0",

@@ -11,7 +11,7 @@ import {
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
 import { formatMs, formatRelative } from "../lib/format";
-import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { SAMPLE_VIDEOS, VISION_PLAYBACK_RATE, getSampleVideo } from "../lib/samples";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
 import { usePollingEffect } from "../lib/usePollingEffect";
@@ -321,6 +321,7 @@ function SpillFeed({
   const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
     isActive,
     sample,
+    playbackRate: VISION_PLAYBACK_RATE,
   });
 
   const resetCycle = useCallback(() => {
@@ -375,12 +376,12 @@ function SpillFeed({
   const tick = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
-    const frame = captureVideoFrameForDetection(video);
+    const frame = await captureVideoFrameForDetection(video);
     if (!frame) return;
     try {
       const [spillResult, coneResult] = await Promise.all([
-        callDetector(frame.image, { model: "spill", conf: spillConfRef.current }).catch(() => ({ detections: [], saved: null })),
-        callDetector(frame.image, { model: "wet_floor_sign", conf: coneConfRef.current }).catch(() => ({ detections: [], saved: null })),
+        callDetector(frame.image, { model: "spill", conf: spillConfRef.current, fingerprint: frame.fingerprint }).catch(() => ({ detections: [], saved: null })),
+        callDetector(frame.image, { model: "wet_floor_sign", conf: coneConfRef.current, fingerprint: frame.fingerprint }).catch(() => ({ detections: [], saved: null })),
       ]);
       const spillBoxes: OverlayDetection[] = spillResult.detections.map((d) => ({
         ...d,

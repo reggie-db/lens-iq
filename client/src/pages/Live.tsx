@@ -22,9 +22,14 @@ import { useDetectionLoop } from "../lib/useDetectionLoop";
 import { usePollingEffect } from "../lib/usePollingEffect";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 
-// Sources the user can feed into the detector. "webcam" is the default; the
-// other entries map onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
+// Sources the user can feed into the detector. The Data + AI Summit expo-floor
+// clip is the default "Live" source so an unattended booth display shows a
+// recognizable crowd instead of prompting for the device camera; the webcam
+// stays available as a second entry under the "Live" group. Everything else
+// maps onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
 const WEBCAM_SOURCE_ID = "webcam";
+// SAMPLE_VIDEOS id of the expo-floor clip rendered under "Live" (see samples.ts).
+const LIVE_SOURCE_ID = "expo-floor";
 
 // Poll serving-status at the same cadence as the server-side AppKit cache TTL.
 const SERVING_STATUS_POLL_MS = 45_000;
@@ -74,7 +79,7 @@ export function LivePage({ isActive }: LivePageProps) {
   const [now, setNow] = useState<number>(() => Date.now());
   const [saving, setSaving] = useState<boolean>(false);
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
-  const [sourceId, setSourceId] = useState<string>(WEBCAM_SOURCE_ID);
+  const [sourceId, setSourceId] = useState<string>(LIVE_SOURCE_ID);
   // Tracks when the current /api/detect tick started. Used for the on-video
   // spinner overlay; we render `now - pendingSince` so the user gets a live
   // elapsed counter during cold starts.
@@ -170,11 +175,11 @@ export function LivePage({ isActive }: LivePageProps) {
 
   const tick = useCallback(async () => {
     if (!videoRef.current) return;
-    const frame = captureVideoFrameForDetection(videoRef.current);
+    const frame = await captureVideoFrameForDetection(videoRef.current);
     if (!frame) return;
     setPendingSince(Date.now());
     try {
-      const result = await callDetector(frame.image, { model: modelId });
+      const result = await callDetector(frame.image, { model: modelId, fingerprint: frame.fingerprint });
       const scaled = result.detections.map((d) => ({
         ...d,
         bbox: scaleDetectionBbox(d.bbox, frame.scaleX, frame.scaleY),
@@ -244,7 +249,7 @@ export function LivePage({ isActive }: LivePageProps) {
 
   const handleSaveSnapshot = async () => {
     if (!videoRef.current || saving) return;
-    const frame = captureVideoFrameForDetection(videoRef.current, {
+    const frame = await captureVideoFrameForDetection(videoRef.current, {
       maxDimension: SNAPSHOT_MAX_DIMENSION,
       quality: 0.78,
     });
@@ -254,7 +259,7 @@ export function LivePage({ isActive }: LivePageProps) {
     }
     setSaving(true);
     try {
-      const result = await callDetector(frame.image, { persist: true, model: modelId });
+      const result = await callDetector(frame.image, { persist: true, model: modelId, fingerprint: frame.fingerprint });
       if (result.saved) {
         toast.success(`Saved ${result.saved.frame_id} with ${result.detections.length} detection(s)`);
       } else {
@@ -311,6 +316,10 @@ export function LivePage({ isActive }: LivePageProps) {
   // the use cases without us hard-coding the alias list.
   const yoloModels = MODELS.filter((m) => m.servingAlias === "detector");
   const specialtyModels = MODELS.filter((m) => m.servingAlias !== "detector");
+  // The expo-floor clip is presented under "Live"; keep it out of the
+  // "Sample clips" group so it isn't listed twice.
+  const liveSample = getSampleVideo(LIVE_SOURCE_ID);
+  const sampleClips = SAMPLE_VIDEOS.filter((s) => s.id !== LIVE_SOURCE_ID);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -337,11 +346,14 @@ export function LivePage({ isActive }: LivePageProps) {
                 <SelectContent>
                   <SelectGroup>
                     <SelectLabel>Live</SelectLabel>
+                    {liveSample && (
+                      <SelectItem value={liveSample.id}>{liveSample.name}</SelectItem>
+                    )}
                     <SelectItem value={WEBCAM_SOURCE_ID}>Webcam</SelectItem>
                   </SelectGroup>
                   <SelectGroup>
                     <SelectLabel>Sample clips</SelectLabel>
-                    {SAMPLE_VIDEOS.map((s) => (
+                    {sampleClips.map((s) => (
                       <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
                     ))}
                   </SelectGroup>
@@ -448,7 +460,7 @@ export function LivePage({ isActive }: LivePageProps) {
                     : "text-slate-400")
                 }
               >
-                {status || "Initializing camera..."}
+                {status || "Initializing..."}
               </div>
             </div>
             <Button

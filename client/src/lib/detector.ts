@@ -32,17 +32,25 @@ export interface CallDetectorOptions {
    * See `lib/models.ts` for the full list.
    */
   model?: string;
+  /**
+   * Frame fingerprint (SHA-256 of normalized decoded pixels) from
+   * `captureVideoFrameForDetection`. Forwarded to the Claude-vision cache so a
+   * looping clip's repeat frames resolve from cache instead of re-paying model
+   * latency. Ignored by the YOLO/Roboflow endpoints. Omit for one-off stills
+   * where caching is moot.
+   */
+  fingerprint?: string | null;
 }
 
 export async function callDetector(
   image: string,
   options: CallDetectorOptions = {},
 ): Promise<DetectorResult> {
-  const { conf = 0.35, iou = 0.5, persist = false, model } = options;
+  const { conf = 0.35, iou = 0.5, persist = false, model, fingerprint } = options;
   const res = await fetch("/api/detect", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ image, conf, iou, persist, model }),
+    body: JSON.stringify({ image, conf, iou, persist, model, fingerprint }),
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");

@@ -18,10 +18,18 @@ resources:
       # enabled" for any pinned-instance request; the platform handles
       # autoscaling implicitly.
       compute_size: MEDIUM
-      # No `user_api_scopes` - everything in the app runs as the SP. UC,
-      # serving, and warehouse grants are all on the SP via the `resources:`
-      # bindings below; the OAuth user token is never used for downstream
-      # calls, so requesting scopes for it would be dead config.
+      # User-authorization (on-behalf-of-user) scopes. Declared in the bundle
+      # so they survive every `bundle run`, which does a full app replacement
+      # and would otherwise wipe scopes set through the UI. These let the app
+      # call Genie (`dashboards.genie`) and the SQL warehouse (`sql`) with the
+      # signed-in user's identity instead of only the SP. The platform adds the
+      # iam.access-control / iam.current-user read scopes automatically, so they
+      # are not declared here. Requires workspace user authorization (Public
+      # Preview) to be enabled, otherwise deploy fails with "user token
+      # passthrough not enabled".
+      user_api_scopes:
+        - sql
+        - dashboards.genie
       resources:
         - name: warehouse
           sql_warehouse:
@@ -130,3 +138,16 @@ resources:
             securable_full_name: ${var.catalog}.${var.schema}.presenter_content
             securable_type: VOLUME
             permission: READ_VOLUME
+        # portr cli auth token (config secret_key) for the public tunnel.
+        # app.yaml reads it with `TUNNEL_TOKEN: valueFrom: tunnel_token`, and
+        # `valueFrom` only resolves against a resource of this exact name. The
+        # token is REQUIRED: portr's handshake fails without it, so the tunnel
+        # never comes up. Scope + key come from the bundle vars so they track
+        # the deploy; the value is put into the scope by scripts/deploy.sh /
+        # `secrets put-secret`. Only relevant when TUNNEL_SUBDOMAIN is set in
+        # app.yaml.
+        - name: tunnel_token
+          secret:
+            scope: ${var.secret_scope}
+            key: ${var.apps_tunnel_secret_key}
+            permission: READ

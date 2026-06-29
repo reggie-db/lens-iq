@@ -2,31 +2,35 @@
 # Databricks Apps boot wrapper for lensiq.
 #
 # Always supervises the node entrypoint. Optionally publishes the app to a
-# public URL through portr (https://portr.dev) when PUBLIC_DOMAIN is set.
+# stable public URL through a portr client (https://github.com/amalshaji/portr)
+# when TUNNEL_SUBDOMAIN is set.
 #
 # Public tunnel (opt-in):
-#   To turn the tunnel on, set both env vars in app.yaml:
-#     PUBLIC_DOMAIN=<subdomain>.<server_host>   e.g. lensiq.apps.dbx.tools
-#     PORTR_TOKEN=<portr secret_key>            usually `valueFrom:` a secret
-#   The leftmost dotted label of PUBLIC_DOMAIN becomes the portr subdomain
-#   (and tunnel name), and everything to the right of the first dot becomes
-#   the portr server host. So `lensiq.apps.dbx.tools` registers subdomain
-#   `lensiq` against the portr server at `apps.dbx.tools`.
+#   To turn the tunnel on, set in app.yaml:
+#     TUNNEL_SUBDOMAIN=<subdomain>   e.g. lensiq  -> https://lensiq.<server>
+#     TUNNEL_SERVER=<host>           e.g. apps.dbx.tools (portr server_url)
+#     TUNNEL_TOKEN=<portr secret>    REQUIRED - the portr cli auth token,
+#                                    usually `valueFrom:` a secret
+#     TUNNEL_SSH=<host:port>         OPTIONAL - portr ssh_url; defaults to
+#                                    "${TUNNEL_SERVER}:4444"
 #
-#   When PUBLIC_DOMAIN is unset (or PORTR_TOKEN is empty), this script
-#   skips the portr install + tunnel completely - it just runs node.
+#   portr dials the portr server over SSH (ssh_url, default :4444) and exposes
+#   the local app under https://<TUNNEL_SUBDOMAIN>.<TUNNEL_SERVER>. The subdomain
+#   must be reserved for the account that owns TUNNEL_TOKEN on the portr server.
+#
+#   When TUNNEL_SUBDOMAIN is unset, this script skips the portr install +
+#   tunnel completely - it just runs node.
 #
 # When the tunnel is enabled, boot sequence is:
-#   1. Re-root HOME under cwd so the portr installer and config land in a
+#   1. Re-root HOME under cwd so the portr binary and config land in a
 #      writable, per-app location (the platform $HOME is read-only in
 #      practice on cold start).
-#   2. Install portr from https://install.portr.dev (idempotent across
-#      restarts since the installer skips when the on-PATH binary is
-#      already the latest release).
-#   3. Render ~/.portr/config.yaml from PUBLIC_DOMAIN + PORTR_TOKEN and the
-#      app's DATABRICKS_APP_PORT.
-#   4. Background `portr start` alongside the node entrypoint so this shell
-#      stays alive as the supervisor.
+#   2. Download the portr client from the pinned GitHub release into
+#      $HOME/.portr/bin (idempotent across restarts - skips when the on-disk
+#      binary already matches PORTR_VERSION).
+#   3. Render $HOME/.portr/config.yaml from TUNNEL_SERVER + TUNNEL_TOKEN.
+#   4. Background `portr http <DATABRICKS_APP_PORT> -s <TUNNEL_SUBDOMAIN>`
+#      alongside the node entrypoint so this shell stays alive as supervisor.
 #
 # Shutdown sequence (SIGTERM / SIGINT / SIGHUP):
 #   1. Forward SIGTERM to both portr (if started) and node.
@@ -35,47 +39,66 @@
 set -euo pipefail
 
 readonly SHUTDOWN_GRACE_SECS=10
+readonly PORTR_VERSION="${PORTR_VERSION:-1.0.13}"
 
-_portr_pid=""
+_tunnel_pid=""
 _node_pid=""
 _shutdown=0
 
 # Optional public tunnel: only fire when the operator has explicitly set
-# PUBLIC_DOMAIN. Empty or unset = no install, no tunnel.
-if [[ -n "${PUBLIC_DOMAIN:-}" ]]; then
-  if [[ -z "${PORTR_TOKEN:-}" ]]; then
-    echo "[start] PUBLIC_DOMAIN=${PUBLIC_DOMAIN} set but PORTR_TOKEN is empty - skipping public tunnel" >&2
-  else
-    _portr_subdomain="${PUBLIC_DOMAIN%%.*}"
-    _portr_server="${PUBLIC_DOMAIN#*.}"
-    if [[ "$_portr_subdomain" == "$PUBLIC_DOMAIN" || -z "$_portr_server" ]]; then
-      echo "[start] PUBLIC_DOMAIN=${PUBLIC_DOMAIN} must include a subdomain (e.g. lensiq.apps.dbx.tools) - skipping public tunnel" >&2
+# TUNNEL_SUBDOMAIN. Empty or unset = no install, no tunnel.
+if [[ -n "${TUNNEL_SUBDOMAIN:-}" ]]; then
+  _tunnel_server="${TUNNEL_SERVER:-apps.dbx.tools}"
+  _tunnel_ssh="${TUNNEL_SSH:-${_tunnel_server}:4444}"
+
+  export HOME="${PWD}/.home"
+  _portr_bin="${HOME}/.portr/bin/portr"
+  mkdir -p "${HOME}/.portr/bin"
+  export PATH="${HOME}/.portr/bin:${PATH}"
+
+  # Idempotent install: download + extract the portr client only when the
+  # on-disk binary is missing or a different release than PORTR_VERSION
+  # (portr --version prints e.g. `portr version 1.0.13`). The release ships a
+  # zip whose archive root holds a single `portr` executable.
+  if [[ ! -x "$_portr_bin" ]] || ! "$_portr_bin" --version 2>/dev/null | grep -q "$PORTR_VERSION"; then
+    case "$(uname -m)" in
+      x86_64|amd64)  _portr_arch="x86_64" ;;
+      aarch64|arm64) _portr_arch="arm64" ;;
+      *)             _portr_arch="x86_64" ;;
+    esac
+    _portr_pkg="portr_${PORTR_VERSION}_Linux_${_portr_arch}"
+    _portr_tmp="$(mktemp -d)"
+    curl -sSfL "https://github.com/amalshaji/portr/releases/download/v${PORTR_VERSION}/${_portr_pkg}.zip" \
+      -o "${_portr_tmp}/portr.zip"
+    # Extract the zip. Prefer unzip; fall back to python3's zipfile when the
+    # base image ships no unzip (common on slim runtimes).
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -o -q "${_portr_tmp}/portr.zip" -d "${_portr_tmp}"
     else
-      export HOME="${PWD}/.home"
-      mkdir -p "${HOME}/.portr/bin"
-
-      export PORTR_AUTO_ADD_PATH=no
-      export PATH="${HOME}/.portr/bin:${PATH}"
-
-      curl -sSf https://install.portr.dev | sh
-
-      cat > "${HOME}/.portr/config.yaml" <<EOF
-server_url: ${_portr_server}
-ssh_url: ${_portr_server}:4444
-secret_key: ${PORTR_TOKEN}
-disable_dashboard: true
-disable_tui: true
-tunnels:
-  - name: ${_portr_subdomain}
-    subdomain: ${_portr_subdomain}
-    port: ${DATABRICKS_APP_PORT}
-EOF
-
-      portr start &
-      _portr_pid=$!
-      echo "[start] portr tunneling https://${PUBLIC_DOMAIN} -> :${DATABRICKS_APP_PORT} (pid=${_portr_pid})" >&2
+      python3 -m zipfile -e "${_portr_tmp}/portr.zip" "${_portr_tmp}"
     fi
+    install -m 0755 "${_portr_tmp}/portr" "$_portr_bin"
+    rm -rf "$_portr_tmp"
   fi
+
+  # portr reads server_url / ssh_url / secret_key from this config for auth.
+  # secret_key (TUNNEL_TOKEN) is required: without it the cli handshake fails
+  # and the tunnel never comes up. The dashboard + TUI are disabled because
+  # there is no interactive terminal in the Apps runtime.
+  mkdir -p "${HOME}/.portr"
+  {
+    printf 'server_url: %s\n' "${_tunnel_server}"
+    printf 'ssh_url: %s\n' "${_tunnel_ssh}"
+    if [[ -n "${TUNNEL_TOKEN:-}" ]]; then
+      printf 'secret_key: %s\n' "${TUNNEL_TOKEN}"
+    fi
+    printf 'disable_dashboard: true\n'
+    printf 'disable_tui: true\n'
+  } > "${HOME}/.portr/config.yaml"
+
+  portr http "${DATABRICKS_APP_PORT}" -s "${TUNNEL_SUBDOMAIN}" &
+  _tunnel_pid=$!
+  echo "[start] portr tunneling https://${TUNNEL_SUBDOMAIN}.${_tunnel_server} -> :${DATABRICKS_APP_PORT} (pid=${_tunnel_pid})" >&2
 fi
 
 # ─── Graceful shutdown ──────────────────────────────────────────────────
@@ -86,13 +109,13 @@ _signal_handler() {
   local sig=$1
   if (( _shutdown )); then return; fi
   _shutdown=1
-  echo "[start] caught ${sig}, forwarding SIGTERM to portr=${_portr_pid:-} app=${_node_pid:-}" >&2
-  if [[ -n "$_portr_pid" ]]; then kill -TERM "$_portr_pid" 2>/dev/null || true; fi
-  if [[ -n "$_node_pid"  ]]; then kill -TERM "$_node_pid"  2>/dev/null || true; fi
+  echo "[start] caught ${sig}, forwarding SIGTERM to portr=${_tunnel_pid:-} app=${_node_pid:-}" >&2
+  if [[ -n "$_tunnel_pid" ]]; then kill -TERM "$_tunnel_pid" 2>/dev/null || true; fi
+  if [[ -n "$_node_pid" ]]; then kill -TERM "$_node_pid" 2>/dev/null || true; fi
 
   (
     sleep "$SHUTDOWN_GRACE_SECS"
-    for pid in "$_portr_pid" "$_node_pid"; do
+    for pid in "$_tunnel_pid" "$_node_pid"; do
       if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
         echo "[start] pid $pid still alive after ${SHUTDOWN_GRACE_SECS}s, sending SIGKILL" >&2
         kill -KILL "$pid" 2>/dev/null || true
@@ -124,14 +147,14 @@ done
 # If portr is still up (node usually exits first because the trap fans the
 # signal to both children but node responds faster), give it the same grace
 # path so we don't leave a zombie behind when the supervisor returns.
-if [[ -n "$_portr_pid" ]] && kill -0 "$_portr_pid" 2>/dev/null; then
-  kill -TERM "$_portr_pid" 2>/dev/null || true
+if [[ -n "$_tunnel_pid" ]] && kill -0 "$_tunnel_pid" 2>/dev/null; then
+  kill -TERM "$_tunnel_pid" 2>/dev/null || true
   for _ in $(seq 1 "$SHUTDOWN_GRACE_SECS"); do
-    kill -0 "$_portr_pid" 2>/dev/null || break
+    kill -0 "$_tunnel_pid" 2>/dev/null || break
     sleep 1
   done
-  kill -KILL "$_portr_pid" 2>/dev/null || true
-  wait "$_portr_pid" 2>/dev/null || true
+  kill -KILL "$_tunnel_pid" 2>/dev/null || true
+  wait "$_tunnel_pid" 2>/dev/null || true
 fi
 
 exit "$_exit_code"

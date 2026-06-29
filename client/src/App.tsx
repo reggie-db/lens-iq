@@ -2,7 +2,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-
 import { useEffect, useState } from "react";
 import {
   Activity, Bell, BookOpen, Camera, Car, ChevronDown, CloudFog, Cone, Cpu, Database,
-  LayoutDashboard, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
+  Fuel, LayoutDashboard, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
   TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
@@ -26,6 +26,7 @@ import { SpillsPage } from "./pages/Spills";
 import { CameraHealthPage } from "./pages/CameraHealth";
 import { FacialRecognitionPage } from "./pages/FacialRecognition";
 import { PizzaInventoryPage } from "./pages/PizzaInventory";
+import { PumpStatusPage } from "./pages/PumpStatus";
 import { InfoPage } from "./pages/Info";
 import { DeckPage } from "./pages/Deck";
 import { AIChatButton } from "./components/AIChatButton";
@@ -33,6 +34,7 @@ import { GlobalLoadingBar } from "./components/GlobalLoadingBar";
 import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
 import { TourProvider, useTour } from "./lib/tour";
 import { KioskProvider, useKiosk } from "./lib/kiosk";
+import { useOboAvailable } from "./lib/auth";
 import "./lib/queries";
 
 type Role = "Admin" | "Store Manager";
@@ -48,6 +50,7 @@ const VIEW_TITLES: Record<string, string> = {
   search: "Data Search",
   inventory: "Inventory",
   "pizza-inventory": "Pizza Inventory",
+  "pump-status": "Pump Status",
   trends: "Trends",
   live: "Live Stream",
   upload: "Image Upload",
@@ -118,6 +121,7 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
       <NavButton view="faces"            label="Facial Recognition" icon={ScanFace}       activeView={activeView} onNavigate={handle} />
       <NavButton view="clarity"          label="Camera Clarity"     icon={CloudFog}       activeView={activeView} onNavigate={handle} />
       <NavButton view="pizza-inventory"  label="Pizza Inventory"    icon={Pizza}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="pump-status"      label="Pump Status"        icon={Fuel}           activeView={activeView} onNavigate={handle} />
       <NavButton view="upload"           label="Image Upload"       icon={Upload}         activeView={activeView} onNavigate={handle} />
       <NavButton view="pipeline"         label="Pipeline"           icon={Workflow}       activeView={activeView} onNavigate={handle} />
       <NavButton view="detections"       label="Detections"         icon={Camera}         activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
@@ -212,6 +216,12 @@ function AppShell() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
+
+  // The Genie chat talks to the space on the signed-in user's behalf, so it
+  // only works when the Databricks Apps proxy forwards a user token. Reached
+  // over the public portr tunnel that token is absent, so hide the chat
+  // button entirely rather than render one that errors on every question.
+  const oboAvailable = useOboAvailable();
 
   // Presenter mode gates the booth-only Talk Track (/info) and Booth Deck
   // (/deck) surfaces. Driven purely by the ?presenterMode=true query param so
@@ -327,6 +337,7 @@ function AppShell() {
             <Route path="/faces" element={<FacialRecognitionPage isActive={activeView === "faces"} />} />
             <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
             <Route path="/pizza-inventory" element={<PizzaInventoryPage isActive={activeView === "pizza-inventory"} />} />
+            <Route path="/pump-status" element={<PumpStatusPage isActive={activeView === "pump-status"} />} />
             <Route path="/upload" element={<UploadPage />} />
             <Route path="/pipeline" element={<PipelinePage />} />
             {/* Presenter-only routes: direct hits without ?presenterMode=true
@@ -336,7 +347,7 @@ function AppShell() {
           </Routes>
         </main>
 
-        <AIChatButton />
+        {oboAvailable && <AIChatButton />}
       </div>
     </div>
   );

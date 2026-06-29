@@ -10,7 +10,7 @@ import {
   scaleDetectionBbox,
 } from "../lib/camera";
 import { callDetector, type Detection } from "../lib/detector";
-import { SAMPLE_VIDEOS, getSampleVideo } from "../lib/samples";
+import { SAMPLE_VIDEOS, VISION_PLAYBACK_RATE, getSampleVideo } from "../lib/samples";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
 import { useSampleVideoStream } from "../lib/useSampleVideoStream";
@@ -262,6 +262,7 @@ function PizzaFeed({
   const { videoSize, status: videoStatus } = useSampleVideoStream(videoRef, {
     isActive,
     sample,
+    playbackRate: VISION_PLAYBACK_RATE,
   });
 
   // Wipe history + bboxes when the source changes so the next clip
@@ -280,13 +281,13 @@ function PizzaFeed({
   const tick = useCallback(async () => {
     const video = videoRef.current;
     if (!video) return;
-    const frame = captureVideoFrameForDetection(video);
+    const frame = await captureVideoFrameForDetection(video);
     if (!frame) return;
     try {
       const [sliceResult, pieResult] = await Promise.all([
-        callDetector(frame.image, { model: "pizza_inventory", conf: sliceConfRef.current })
+        callDetector(frame.image, { model: "pizza_inventory", conf: sliceConfRef.current, fingerprint: frame.fingerprint })
           .catch(() => ({ detections: [], saved: null })),
-        callDetector(frame.image, { model: "pizza_pie", conf: pieConfRef.current })
+        callDetector(frame.image, { model: "pizza_pie", conf: pieConfRef.current, fingerprint: frame.fingerprint })
           .catch(() => ({ detections: [], saved: null })),
       ]);
       const sliceBoxes: OverlayDetection[] = sliceResult.detections.map((d) => ({

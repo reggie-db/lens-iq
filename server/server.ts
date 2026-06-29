@@ -3,13 +3,14 @@ import { readFile, stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
 import { analytics, createApp, files, genie, lakebase, serving, server, sql } from "@databricks/appkit";
+import { createAgent, GENIE_INSTRUCTIONS, mastra } from "@dbx-tools/appkit-mastra";
 import { z } from "zod";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
 import { getServingStatus } from "./serving-status.ts";
 import { invokeServing, sendEndpointError } from "./serving-invoke.ts";
 import { startServingKeepAlive } from "./serving-keepalive.ts";
-import { detectWithClaude, type VisionDetection } from "./vision-detector.ts";
+import { detectWithClaude, type VisionCache, type VisionDetection } from "./vision-detector.ts";
 import { decodeImage, toBase64Body, toDataUrl } from "./image-data-url.ts";
 import { extractChatText, extractJsonObject } from "./llm-response.ts";
 import { rewriteTalkTrack } from "./talk-track-rewrite.ts";
@@ -62,7 +63,10 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 // Everything in this app runs as the app's service principal. There is no
 // `asUser(req)` anywhere - the SP holds the UC + serving + warehouse grants,
 // and HTTP routes never need the end user's identity for downstream calls.
-// app.yaml therefore omits `user_api_scopes` entirely.
+// resources/app.yml does declare `user_api_scopes` (sql + dashboards.genie)
+// so the Databricks Apps proxy forwards the user's `X-Forwarded-Access-Token`;
+// the only thing that header gates today is the Genie chat in the UI (see the
+// /api/auth/obo route below) - downstream calls still run as the SP.
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
@@ -551,6 +555,43 @@ async function _proxyUpstreamSampleVideo(
 // before createApp so the first /api/analytics request hits resolved SQL.
 await renderQueryFiles();
 
+// "Ask LensIQ" chat agent. Replaces the stock AppKit <GenieChat> with a
+// Mastra agent (via @dbx-tools/appkit-mastra) that drives the LensIQ
+// Detections Genie space as a set of tools: it asks the space focused
+// sub-questions, streams progress into the chat, and embeds inline
+// charts / data tables the @dbx-tools/appkit-mastra-ui <MastraChat>
+// component renders. GENIE_INSTRUCTIONS is the canonical Genie
+// orchestration prompt; `plugins.genie?.toolkit()` is auto-discovered
+// from the registered genie() plugin at runtime (so this definition is
+// inert when no Genie space is configured - we only register the
+// mastra() plugin below when DATABRICKS_GENIE_SPACE_ID is set). The
+// agent's model resolves to the same Claude endpoint the vision
+// detector uses (DATABRICKS_SERVING_ENDPOINT_LLM); when unset the
+// plugin falls back to its dynamic capability-class picker.
+const lensIqAgent = createAgent({
+  name: "lensiq",
+  instructions: [
+    "You are LensIQ, a data analyst for a fleet of quick-serve restaurant",
+    "cameras. Answer questions about temperatures, alerts, license plates,",
+    "detections, guest counts, and inventory by driving the Genie tools",
+    "below - they are the only way to see the live data, so use them",
+    "whenever the question is about the data the space covers. Reserve",
+    "direct (no-tool) answers for meta-questions about your own behaviour",
+    "or the conversation itself.",
+    "",
+    GENIE_INSTRUCTIONS,
+  ].join("\n"),
+  ...(process.env.DATABRICKS_SERVING_ENDPOINT_LLM
+    ? { model: process.env.DATABRICKS_SERVING_ENDPOINT_LLM }
+    : {}),
+  tools(plugins) {
+    // Genie toolkit only (ask_genie, get_statement, prepare_chart, ...),
+    // mirroring the data-only scope the old <GenieChat> had. The `?.`
+    // guard keeps this safe if the genie() plugin isn't registered.
+    return { ...(plugins.genie?.toolkit() ?? {}) };
+  },
+});
+
 const AppKit = await createApp({
   cache: {
     enabled: true,
@@ -648,6 +689,15 @@ const AppKit = await createApp({
     // dev.sh locally. Service-principal pool (no asUser) since we only ever
     // write app-aggregated counts, never per-user data.
     lakebase(),
+    // "Ask LensIQ" chat backend. Mounts the lensIqAgent under /api/mastra
+    // with a streaming chat route the <MastraChat> UI drives over
+    // @mastra/client-js. Registered after lakebase() so Mastra's thread
+    // storage (PostgresStore) + semantic recall (PgVector) can open the
+    // Lakebase pool; gated on the Genie space id like genie() above so the
+    // app still boots without a space (the chat button is hidden then).
+    ...(process.env.DATABRICKS_GENIE_SPACE_ID
+      ? [mastra({ storage: true, memory: true, agents: lensIqAgent })]
+      : []),
   ],
   onPluginsReady(appkit) {
     appkit.server.extend((app) => {
@@ -673,6 +723,21 @@ const AppKit = await createApp({
       // QR-codes and shared links readable.
       app.get("/mobile", (_req, res) => {
         res.redirect(302, "/mobile.html");
+      });
+
+      // Reports whether this request carries an on-behalf-of-user token. The
+      // Databricks Apps front-door proxy injects `X-Forwarded-Access-Token`
+      // (the signed-in user's OAuth token) on every request once user
+      // authorization is enabled and the app declares user_api_scopes. The
+      // public portr tunnel (scripts/start.sh) terminates *inside* the
+      // container and forwards straight to this listener, bypassing that
+      // proxy, so the header is absent on tunnel traffic. The client uses
+      // this to hide the Genie chat (which depends on the user token) when
+      // the app is reached over the tunnel. Header presence is the whole
+      // signal - we never read the token value here.
+      app.get("/api/auth/obo", (req, res) => {
+        const token = req.headers["x-forwarded-access-token"];
+        res.json({ obo: typeof token === "string" && token.length > 0 });
       });
 
       const ServingStatusParams = z.object({ alias: z.string().min(1) });
@@ -842,6 +907,11 @@ const AppKit = await createApp({
         iou: z.number().default(0.5),
         persist: z.boolean().default(false),
         model: z.string().default(DEFAULT_MODEL_ID),
+        // Frame fingerprint (SHA-256 of normalized decoded pixels) the client
+        // computes from the capture canvas. Seeds the Claude-vision cache key
+        // so a looping clip's repeat frames hit cache; nullable/optional
+        // because YOLO callers and one-off stills don't send it.
+        fingerprint: z.string().nullish(),
       });
 
       // Models that resolve via the generic Claude vision detector instead
@@ -870,6 +940,36 @@ const AppKit = await createApp({
         "been cut into wedges should be reported as its individual " +
         "`pizza_slice` detections, NOT as a `pizza_pie`. Do not " +
         "include drink cups, napkins, plates, hands, or pizza boxes.";
+      // Shared prompt for the gas-station forecourt camera. Both pump_bagged
+      // (out of service) and pump_active (in service) use the same labels +
+      // addendum so one Claude call per frame serves both - the second
+      // /api/detect from the Pump Status page hits the image-hash cache.
+      const _PUMP_STATUS_PROMPT =
+        "The camera looks at a gas-station forecourt / fuel dispensers. A " +
+        "pump is OUT OF SERVICE when a bag, plastic cover, or sleeve is tied " +
+        "or slipped over its nozzle or handle (occasionally over the whole " +
+        "dispenser face). Detect (a) every fuel nozzle/dispenser that has " +
+        "such a bag or cover over it as label `bagged_pump`, and (b) every " +
+        "fuel nozzle/dispenser whose handle is clear and usable as label " +
+        "`active_pump`. Box each individual nozzle/dispenser position, not " +
+        "the whole pump island. Do not include cars, people, price signs, " +
+        "trash cans, or hoses that are simply hung on the holster without a " +
+        "bag.";
+      // Shared prompt for the bar / table-service camera. All three beer
+      // fill-level models use the same labels + addendum so one Claude call
+      // per frame serves the whole trio - the 2nd and 3rd /api/detect from
+      // the Beer Service page hit the perceptual-fingerprint cache.
+      const _BEER_FILL_PROMPT =
+        "The camera looks at a bar or restaurant table with beer glasses " +
+        "(pints, steins, pilsners, mugs, or plastic cups of beer). Classify " +
+        "EACH glass by how much beer is left and emit exactly one box per " +
+        "glass with the matching label: `beer_full` when the glass is about " +
+        "two-thirds full or more, `beer_half` when it is roughly one-third " +
+        "to two-thirds full, and `beer_low` when it is under about one-third " +
+        "(running low or nearly empty). Judge the fill by the height of the " +
+        "liquid (and its foam head) relative to the glass. Box the whole " +
+        "glass, not just the liquid. Ignore water glasses, soda, coffee " +
+        "cups, empty glassware with no beer, bottles, and cans.";
       const VISION_GROUPS: Record<string, VisionGroup> = {
         spill: { labels: ["spill", "cone"], match: "spill" },
         wet_floor_sign: { labels: ["spill", "cone"], match: "cone" },
@@ -887,6 +987,38 @@ const AppKit = await createApp({
           labels: ["pizza_slice", "pizza_pie"],
           match: "pizza_pie",
           promptAddendum: _PIZZA_INVENTORY_PROMPT,
+        },
+        // Pump Status page calls both models in parallel each tick.
+        // pump_bagged surfaces only `bagged_pump` hits (out of service);
+        // pump_active surfaces only `active_pump` hits. Same labels +
+        // addendum means both /api/detect calls share one Claude round-trip.
+        pump_bagged: {
+          labels: ["bagged_pump", "active_pump"],
+          match: "bagged_pump",
+          promptAddendum: _PUMP_STATUS_PROMPT,
+        },
+        pump_active: {
+          labels: ["bagged_pump", "active_pump"],
+          match: "active_pump",
+          promptAddendum: _PUMP_STATUS_PROMPT,
+        },
+        // Beer Service page calls all three in parallel each tick. Each model
+        // surfaces only its own fill bucket; identical labels + addendum mean
+        // the trio shares one Claude round-trip per frame.
+        beer_full: {
+          labels: ["beer_full", "beer_half", "beer_low"],
+          match: "beer_full",
+          promptAddendum: _BEER_FILL_PROMPT,
+        },
+        beer_half: {
+          labels: ["beer_full", "beer_half", "beer_low"],
+          match: "beer_half",
+          promptAddendum: _BEER_FILL_PROMPT,
+        },
+        beer_low: {
+          labels: ["beer_full", "beer_half", "beer_low"],
+          match: "beer_low",
+          promptAddendum: _BEER_FILL_PROMPT,
         },
       };
 
@@ -919,6 +1051,14 @@ const AppKit = await createApp({
             const allHits = await detectWithClaude(appkit, body.image, {
               labels: visionGroup.labels,
               promptAddendum: visionGroup.promptAddendum,
+              // Perceptual fingerprint seeds the cache key (and enables fuzzy
+              // near-frame matching) so a looping clip's repeat / near-static
+              // frames resolve from cache instead of re-paying model latency.
+              frameFingerprint: body.fingerprint ?? undefined,
+              // Persistent L2 cache keyed by the same fingerprint so a looping
+              // demo clip pays for each distinct frame's Claude call once -
+              // even across container restarts / replicas.
+              cache: _visionCache,
             });
             const matched = allHits.filter(
               (h) => h.label === visionGroup.match && h.confidence >= body.conf,
@@ -1127,6 +1267,54 @@ const AppKit = await createApp({
       const _ensureAppSchema = onceAsync(() =>
         _runIdempotentDdl(`CREATE SCHEMA IF NOT EXISTS ${APP_SCHEMA}`),
       );
+
+      // Persistent L2 cache for Claude vision detections. The in-process LRU
+      // in vision-detector.ts only survives one container's lifetime, so a
+      // cold start or a second replica re-pays the 3-5s Claude latency for
+      // frames it has already scored. This table is keyed by the same opaque
+      // frame fingerprint the detector uses (image hash + labels + prompt),
+      // so a looping demo clip pays for each distinct frame once across all
+      // instances and restarts. Detections are stored as JSONB (an array of
+      // {label, bbox, confidence?}); an empty array is a valid, cacheable
+      // "nothing detected" result.
+      const _ensureVisionCacheTable = onceAsync(async () => {
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.vision_cache (
+            cache_key   TEXT PRIMARY KEY,
+            detections  JSONB NOT NULL,
+            created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+      });
+
+      // VisionCache implementation handed to detectWithClaude. Both methods
+      // are best-effort by contract - the detector swallows their rejections
+      // and falls back to calling the model - but we still ensure the table
+      // first so the very first lookup/store on a fresh project doesn't fail
+      // on a missing relation. ON CONFLICT DO NOTHING because the fingerprint
+      // is deterministic: the same frame always yields the same detections,
+      // so there is nothing to update once a key exists.
+      const _visionCache: VisionCache = {
+        async get(key) {
+          await _ensureVisionCacheTable();
+          const result = await appkit.lakebase.query(
+            `SELECT detections FROM ${APP_SCHEMA}.vision_cache WHERE cache_key = $1`,
+            [key],
+          );
+          const row = result.rows[0] as { detections: VisionDetection[] } | undefined;
+          return row ? row.detections : null;
+        },
+        async set(key, detections) {
+          await _ensureVisionCacheTable();
+          await appkit.lakebase.query(
+            `INSERT INTO ${APP_SCHEMA}.vision_cache (cache_key, detections)
+             VALUES ($1, $2::jsonb)
+             ON CONFLICT (cache_key) DO NOTHING`,
+            [key, JSON.stringify(detections)],
+          );
+        },
+      };
 
       // Lakebase table backing the Guests page guest-count flush. Same
       // lazy ensure pattern as plate_reads / fog_observations / spill_cycles

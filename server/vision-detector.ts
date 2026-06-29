@@ -14,12 +14,23 @@
 //   model (Claude on the shared `llm` alias) to locate every
 //   instance of a caller-supplied label list, returning a JSON
 //   array of labelled boxes. Multiple /api/detect calls that
-//   reference the same image + label set share one Claude round-
-//   trip via the SHA-256 image-hash LRU cache.
+//   reference the same frame + label set share one Claude round-
+//   trip via the LRU cache.
+//
+// Caching / fingerprinting:
+//   The cache key is `${seed}|${labels}|${addendum}`. The seed is the
+//   client's frame fingerprint (a SHA-256 over normalized DECODED pixels)
+//   when one is supplied, otherwise a SHA-256 of the raw image bytes. The
+//   normalized-pixel seed is what makes a looping demo clip actually hit
+//   cache: a raw byte hash changes every frame because the browser re-encodes
+//   the JPEG, so it would miss on every pass; hashing post-decode pixels
+//   collides re-encodings of the same visual frame while keeping genuinely
+//   different frames distinct. Lookup is EXACT-match only - no Hamming /
+//   perceptual fuzzy matching - so a frame never reuses a neighbour's boxes.
 //
 // API:
-//   detectWithClaude(appkit, image, { labels, promptAddendum? })
-//     -> { label, confidence, bbox }[]
+//   detectWithClaude(appkit, image, { labels, promptAddendum?,
+//     frameFingerprint?, cache? }) -> { label, confidence, bbox }[]
 //   The returned list contains EVERY label match found; the caller
 //   is responsible for filtering down to a specific label or
 //   applying a confidence floor.
@@ -58,15 +69,26 @@ interface CacheEntry {
 
 const _cache = new Map<string, CacheEntry>();
 
-function _cacheGet(key: string): VisionDetection[] | null {
+// Re-insert an entry to move it to the tail (most-recently-used) of the
+// Map's insertion-ordered key list, so the size-cap eviction below drops
+// the genuinely-coldest entry.
+function _touch(key: string, entry: CacheEntry): void {
+  _cache.delete(key);
+  _cache.set(key, entry);
+}
+
+// Exact-match L1 lookup. The frame fingerprint is a SHA-256 over normalized
+// decoded pixels, so the same visual frame produces the same key on every
+// loop pass - there is no perceptual/Hamming fuzzy matching, which is what
+// kept a moving subject from reusing a near-neighbour's stale boxes.
+function _cacheGetExact(key: string): VisionDetection[] | null {
   const hit = _cache.get(key);
   if (!hit) return null;
   if (Date.now() - hit.ts > _CACHE_TTL_MS) {
     _cache.delete(key);
     return null;
   }
-  _cache.delete(key);
-  _cache.set(key, hit);
+  _touch(key, hit);
   return hit.detections;
 }
 
@@ -109,11 +131,21 @@ function _hashImage(bytes: Buffer): string {
   return crypto.createHash("sha256").update(bytes).digest("hex");
 }
 
-function _cacheKey(imageHash: string, labels: readonly string[], addendum: string): string {
-  // Sort labels so ["spill","cone"] and ["cone","spill"] share a
-  // cache entry; the model returns the same hits either way.
+// The "what are we asking about these pixels" half of the cache key: the
+// sorted label set plus a short hash of the prompt addendum. Sorting means
+// ["spill","cone"] and ["cone","spill"] share a cache entry (the model
+// returns the same hits either way).
+function _groupKey(labels: readonly string[], addendum: string): string {
   const sorted = [...labels].map((l) => l.trim().toLowerCase()).sort();
-  return `${imageHash}|${sorted.join(",")}|${crypto.createHash("sha1").update(addendum).digest("hex").slice(0, 12)}`;
+  return `${sorted.join(",")}|${crypto.createHash("sha1").update(addendum).digest("hex").slice(0, 12)}`;
+}
+
+// Normalize a client-supplied frame fingerprint (a 64-hex-char SHA-256 of the
+// normalized decoded pixels) to lowercase, or null when it is missing /
+// malformed - in which case the detector falls back to a raw byte hash.
+function _normalizeFingerprint(fingerprint: string | undefined): string | null {
+  if (!fingerprint || !/^[0-9a-f]{64}$/i.test(fingerprint)) return null;
+  return fingerprint.toLowerCase();
 }
 
 // Open-ended prompt template. Earlier strict variants
@@ -248,6 +280,92 @@ function _coerceLabel(
   ) {
     return "pizza_pie";
   }
+  // Bagged (out-of-service) pump synonyms. Claude phrases the covered
+  // nozzle a dozen ways; collapse the natural variants back to the
+  // canonical label only when the caller asked for it. Bare "pump" is
+  // intentionally NOT mapped - it doesn't say bagged vs active.
+  if (
+    allowedLowerLabels.includes("bagged_pump")
+    && (
+      v === "bagged pump"
+      || v === "baggedpump"
+      || v === "bagged"
+      || v === "bagged nozzle"
+      || v === "covered pump"
+      || v === "covered nozzle"
+      || v === "covered"
+      || v === "bag"
+      || v === "out of service"
+      || v === "out-of-service"
+      || v === "oos"
+    )
+  ) {
+    return "bagged_pump";
+  }
+  // Active (in-service) pump synonyms.
+  if (
+    allowedLowerLabels.includes("active_pump")
+    && (
+      v === "active pump"
+      || v === "activepump"
+      || v === "active"
+      || v === "open pump"
+      || v === "in service"
+      || v === "in-service"
+      || v === "available pump"
+      || v === "available"
+      || v === "clear pump"
+      || v === "usable pump"
+    )
+  ) {
+    return "active_pump";
+  }
+  // Beer fill-level synonyms. Claude tends to describe the glass ("full
+  // beer", "beer glass full") rather than emit the snake_case label, so
+  // collapse the natural variants back per bucket when the caller asked.
+  if (
+    allowedLowerLabels.includes("beer_full")
+    && (
+      v === "full beer"
+      || v === "beer full"
+      || v === "full glass"
+      || v === "full beer glass"
+      || v === "beerfull"
+      || v === "full"
+    )
+  ) {
+    return "beer_full";
+  }
+  if (
+    allowedLowerLabels.includes("beer_half")
+    && (
+      v === "half beer"
+      || v === "beer half"
+      || v === "half full"
+      || v === "half-full"
+      || v === "half glass"
+      || v === "half full beer"
+      || v === "beerhalf"
+      || v === "half"
+    )
+  ) {
+    return "beer_half";
+  }
+  if (
+    allowedLowerLabels.includes("beer_low")
+    && (
+      v === "low beer"
+      || v === "beer low"
+      || v === "almost empty"
+      || v === "nearly empty"
+      || v === "low"
+      || v === "empty beer"
+      || v === "beerlow"
+      || v === "running low"
+    )
+  ) {
+    return "beer_low";
+  }
   return null;
 }
 
@@ -296,6 +414,24 @@ function _isPlausibleBbox(
   return true;
 }
 
+/**
+ * Optional second-level (persistent) cache behind the in-process LRU.
+ *
+ * The in-process Map cache (L1) only lives for the life of one container
+ * and is not shared across instances, so a cold start or a second replica
+ * re-pays the 3-5s Claude latency for frames it has already seen. Wiring an
+ * L2 (e.g. Lakebase, keyed by the same frame-fingerprint cache key) lets the
+ * demo stay snappy across restarts and instances without hitting the model
+ * again. Both hooks are best-effort: detectWithClaude swallows their errors
+ * so a cache outage degrades to "call the model", never to a failed detect.
+ */
+export interface VisionCache {
+  /** Return cached detections for `key`, or null on miss/expiry. */
+  get(key: string): Promise<VisionDetection[] | null>;
+  /** Persist detections (possibly empty) for `key`. */
+  set(key: string, detections: VisionDetection[]): Promise<void>;
+}
+
 export interface DetectWithClaudeOptions {
   /** Object types to detect, e.g. ["spill", "cone"]. Case-insensitive. */
   labels: readonly string[];
@@ -306,6 +442,20 @@ export interface DetectWithClaudeOptions {
    * larger than a coin"). Kept out of the cache key by hashing.
    */
   promptAddendum?: string;
+  /**
+   * Optional frame fingerprint (64-hex-char SHA-256 of normalized decoded
+   * pixels) from the client capture. When present it seeds the cache key
+   * INSTEAD of the raw image-byte hash, so a looping clip's re-encoded frames
+   * collide on an exact-match lookup while distinct frames stay distinct.
+   * When absent, caching falls back to a raw byte-hash match.
+   */
+  frameFingerprint?: string;
+  /**
+   * Optional persistent L2 cache (e.g. Lakebase). Checked after the
+   * in-process LRU on the way in and populated alongside it on a model
+   * hit. Errors are swallowed - the model call is the source of truth.
+   */
+  cache?: VisionCache;
 }
 
 /**
@@ -313,9 +463,10 @@ export interface DetectWithClaudeOptions {
  * box matching any of `labels`, with each detection carrying its
  * own label + confidence.
  *
- * The result is cached by (image bytes, label set, prompt addendum)
+ * The result is cached by (frame fingerprint, label set, prompt addendum)
  * so repeat callers - e.g. /api/detect for `spill` then `wet_floor_sign`
- * on the same frame - share one round-trip.
+ * on the same frame - share one round-trip, and a looping clip's repeat
+ * frames resolve from cache (see the Caching section in the file header).
  *
  * The returned bbox is in the SAME pixel coordinate space as the
  * `image` data URL passed in. The Spills page already scales to
@@ -333,10 +484,42 @@ export async function detectWithClaude(
   if (!parsed) return [];
 
   const addendum = options.promptAddendum ?? "";
-  const imageHash = _hashImage(parsed.bytes);
-  const key = _cacheKey(imageHash, labels, addendum);
-  const cached = _cacheGet(key);
-  if (cached !== null) return cached;
+  const group = _groupKey(labels, addendum);
+  const fingerprint = _normalizeFingerprint(options.frameFingerprint);
+  // Cache seed: the client's normalized-pixel fingerprint when supplied (so
+  // re-encodings of the same visual frame collide on the exact key), else a
+  // hash of the raw image bytes. Either way lookup is exact-match only.
+  const seed = fingerprint ?? _hashImage(parsed.bytes);
+  const key = `${seed}|${group}`;
+
+  const exact = _cacheGetExact(key);
+  if (exact !== null) return exact;
+
+  // L2 (persistent) cache lookup. Promote a hit into the in-process LRU so
+  // the rest of this container's lifetime serves it from L1. Cache failures
+  // never block detection - fall through to the model call.
+  if (options.cache) {
+    try {
+      const l2 = await options.cache.get(key);
+      if (l2 !== null) {
+        _cacheSet(key, l2);
+        return l2;
+      }
+    } catch (err) {
+      console.warn("[vision] L2 cache get failed:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  // Best-effort, fire-and-forget L2 write. Used on the model-response paths
+  // (including a legitimate "nothing detected") but NOT on the call-failed
+  // catch path - we don't want to persist a transient model outage as an
+  // empty result that hides real detections on the next loop.
+  const persistL2 = (dets: VisionDetection[]): void => {
+    if (!options.cache) return;
+    void options.cache.set(key, dets).catch((err) => {
+      console.warn("[vision] L2 cache set failed:", err instanceof Error ? err.message : err);
+    });
+  };
 
   const dims = _imageSize(parsed.bytes, parsed.mime);
   const w = dims?.w ?? 1280;
@@ -376,6 +559,7 @@ export async function detectWithClaude(
       console.warn("[vision] could not parse LLM response:", raw.slice(0, 240));
     }
     _cacheSet(key, []);
+    persistL2([]);
     return [];
   }
 
@@ -388,5 +572,6 @@ export async function detectWithClaude(
     valid.push(hit);
   }
   _cacheSet(key, valid);
+  persistL2(valid);
   return valid;
 }

@@ -37,6 +37,15 @@ export interface UseSampleVideoStreamOptions {
   sample: SampleVideo | null;
   /** Defaults to true. Set false for sources that shouldn't auto-restart at EOF. */
   loop?: boolean;
+  /**
+   * Playback speed multiplier (default 1). LLM-vision pages pass a value
+   * below 1 (see VISION_PLAYBACK_RATE) so the scene advances slowly enough
+   * for the 3-5s Claude detector to keep up: slower playback means
+   * consecutive captured frames are more similar, which both keeps the bbox
+   * overlay aligned with what's on screen and lets the perceptual-hash cache
+   * collapse those near-identical frames onto one model call.
+   */
+  playbackRate?: number;
 }
 
 export interface UseSampleVideoStreamResult {
@@ -48,7 +57,7 @@ export function useSampleVideoStream(
   videoRef: RefObject<HTMLVideoElement | null>,
   options: UseSampleVideoStreamOptions,
 ): UseSampleVideoStreamResult {
-  const { isActive, sample, loop = true } = options;
+  const { isActive, sample, loop = true, playbackRate = 1 } = options;
   const [videoSize, setVideoSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
   const [status, setStatus] = useState<SampleVideoStatus>({ kind: "idle", message: "" });
 
@@ -65,6 +74,7 @@ export function useSampleVideoStream(
     video.crossOrigin = "anonymous";
     video.loop = loop;
     video.muted = true;
+    video.playbackRate = playbackRate;
     video.src = sampleVideoUrl(sample);
 
     const syncVideoSize = () => {
@@ -76,6 +86,9 @@ export function useSampleVideoStream(
     // too, which is fine: clearing status during a resume is harmless.
     const onPlaying = () => {
       if (cancelled) return;
+      // Reassert playbackRate: assigning a new src resets it to 1 in some
+      // browsers, and it isn't preserved across the loop wraparound either.
+      if (video.playbackRate !== playbackRate) video.playbackRate = playbackRate;
       setStatus({ kind: "playing", message: "" });
     };
     const onError = () => {
@@ -101,7 +114,7 @@ export function useSampleVideoStream(
       video.removeAttribute("src");
       video.load();
     };
-  }, [isActive, sample, loop, videoRef]);
+  }, [isActive, sample, loop, playbackRate, videoRef]);
 
   return { videoSize, status };
 }

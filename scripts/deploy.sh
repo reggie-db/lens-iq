@@ -10,7 +10,7 @@
 #
 # Step ordering:
 #   1. Source .env so DATABRICKS_CONFIG_PROFILE (and any operator-supplied
-#      ROBOFLOW_API_KEY / PORTR_TOKEN) flow into the CLI.
+#      ROBOFLOW_API_KEY / TUNNEL_TOKEN) flow into the CLI.
 #   2. `databricks bundle deploy` creates everything DABs supports:
 #        UC catalog (retail_consumer_goods)
 #        UC schema  (lens_iq)
@@ -23,7 +23,7 @@
 #          volumes, secret)
 #        Jobs (seed + per-detector deploys + pipeline simulator)
 #        Lakeflow Spark Declarative Pipeline.
-#   3. `secrets put-secret` for roboflow_api_key + portr_token if the values
+#   3. `secrets put-secret` for roboflow_api_key + tunnel_token if the values
 #      are present in env vars. Missing values skip with a warning so the
 #      Roboflow detector deploy jobs are allowed to fail loudly later (the
 #      app keeps working without them).
@@ -66,7 +66,7 @@
 #
 # Secrets (optional, read from env if set):
 #   ROBOFLOW_API_KEY=...    pushed into lens-iq/roboflow_api_key
-#   PORTR_TOKEN=...         pushed into lens-iq/portr_token
+#   TUNNEL_TOKEN=...        pushed into lens-iq/tunnel_token (portr cli auth token)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -252,8 +252,8 @@ SECRET_SCOPE="$(_bundle_var secret_scope)"
 SECRET_SCOPE="${SECRET_SCOPE:-lens-iq}"
 ROBOFLOW_KEY_NAME="$(_bundle_var roboflow_secret_key)"
 ROBOFLOW_KEY_NAME="${ROBOFLOW_KEY_NAME:-roboflow_api_key}"
-PORTR_KEY_NAME="$(_bundle_var apps_tunnel_secret_key)"
-PORTR_KEY_NAME="${PORTR_KEY_NAME:-portr_token}"
+TUNNEL_KEY_NAME="$(_bundle_var apps_tunnel_secret_key)"
+TUNNEL_KEY_NAME="${TUNNEL_KEY_NAME:-tunnel_token}"
 WAREHOUSE_ID="$(_bundle_var warehouse_id)"
 
 # ─── 2. Secrets ──────────────────────────────────────────────────────────
@@ -269,7 +269,26 @@ _put_secret() {
   _log "  ${label}: stored in ${SECRET_SCOPE}/${key}"
 }
 _put_secret "$ROBOFLOW_KEY_NAME" "${ROBOFLOW_API_KEY:-}" "ROBOFLOW_API_KEY"
-_put_secret "$PORTR_KEY_NAME"    "${PORTR_TOKEN:-}"     "PORTR_TOKEN"
+_put_secret "$TUNNEL_KEY_NAME"   "${TUNNEL_TOKEN:-}"    "TUNNEL_TOKEN"
+
+# Grant the app's service principal READ on the secret scope. The `secret`
+# resource binding in resources/app.yml (TUNNEL_TOKEN: valueFrom: tunnel_token)
+# does NOT create this ACL on its own, and without it the Apps platform
+# injects the secret-backed env var as an EMPTY string - the app boots, but
+# scripts/start.sh sees TUNNEL_TOKEN="" so portr's handshake fails and the
+# public tunnel never comes up. Other secret valueFrom bindings would silently
+# resolve empty too.
+# The SP client id is per-workspace, so we read it off the deployed app rather
+# than hardcode it.
+# put-acl is idempotent, so re-running just refreshes the existing grant.
+_APP_SP_ID="$(databricks apps get "$_WORKSPACE_APP_NAME" --output json 2>/dev/null \
+  | jq -r '.service_principal_client_id // empty')"
+if [[ -n "$_APP_SP_ID" ]]; then
+  databricks secrets put-acl "$SECRET_SCOPE" "$_APP_SP_ID" READ >/dev/null
+  _log "  granted app SP ${_APP_SP_ID} READ on ${SECRET_SCOPE}"
+else
+  _warn "  could not resolve app SP client id - secret-backed env vars (TUNNEL_TOKEN, etc.) may inject empty until the SP has READ on ${SECRET_SCOPE}."
+fi
 
 # ─── 3. Volume sync (sample videos + presenter content) ──────────────────
 if [[ "$SKIP_SYNC" -eq 0 ]]; then

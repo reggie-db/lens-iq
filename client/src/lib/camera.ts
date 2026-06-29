@@ -20,6 +20,61 @@ export interface DetectionFrame {
   /** Multiply detector bbox coords by this to map onto full video/canvas pixels. */
   scaleX: number;
   scaleY: number;
+  /**
+   * High-uniqueness frame fingerprint used as the server-side Claude-vision
+   * cache key. This is a SHA-256 over normalized DECODED RGBA pixels (the
+   * frame redrawn to a fixed-max-dimension canvas), not the JPEG bytes. The
+   * same visual frame hashes the same even when the data URL / JPEG encoding
+   * differs - so a looping clip's replays still hit cache - while a minute
+   * visual change produces a new key, so distinct frames never reuse a
+   * neighbour's boxes. The server does an EXACT key lookup on this (no fuzzy
+   * matching). Null only if the canvas can't be read (e.g. a tainted source),
+   * in which case the server falls back to a raw byte hash.
+   */
+  fingerprint: string | null;
+}
+
+// Max canvas dimension the frame is normalized to before hashing. Downscaling
+// to a fixed box makes the hash independent of the source resolution and
+// strips the high-frequency detail that JPEG re-encoding jitters, so a looping
+// clip's replays of one scene hash identically. Small enough to keep the
+// per-frame getImageData + SHA-256 cheap, large enough that genuinely
+// different frames still differ in the decoded pixels.
+const _FINGERPRINT_MAX_DIMENSION = 320;
+
+// SHA-256 over normalized DECODED RGBA pixels of `source`, returned as a
+// 64-char hex string. Unlike a JPEG-byte hash (which changes every time the
+// browser re-encodes the same frame) this hashes the post-decode pixels after
+// redrawing to a fixed-max-dimension canvas, so the same visual frame is
+// stable across encodings while any real visual change yields a new key. The
+// server uses it for an exact-match cache lookup. Returns null if the 2D
+// context can't be created or the pixels are unreadable (tainted canvas).
+async function _frameFingerprint(
+  source: CanvasImageSource,
+  srcW: number,
+  srcH: number,
+  maxDimension = _FINGERPRINT_MAX_DIMENSION,
+): Promise<string | null> {
+  const { width, height } = _fitWithinBox(srcW, srcH, maxDimension);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) return null;
+  ctx.drawImage(source, 0, 0, srcW, srcH, 0, 0, width, height);
+  let pixels: Uint8ClampedArray;
+  try {
+    pixels = ctx.getImageData(0, 0, width, height).data;
+  } catch {
+    return null;
+  }
+  // Copy into a plain ArrayBuffer-backed view: getImageData returns a
+  // Uint8ClampedArray whose buffer type is widened to ArrayBufferLike (could
+  // be SharedArrayBuffer), which crypto.subtle.digest's BufferSource rejects.
+  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(pixels));
+  return [...new Uint8Array(digest)]
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 export interface CameraStreamResult {
@@ -137,10 +192,10 @@ export function captureVideoFrame(video: HTMLVideoElement, quality = 0.7): strin
  * Downscale a frame before POST /api/detect, then scale bounding boxes back up
  * with `scaleX` / `scaleY` on the client.
  */
-export function captureVideoFrameForDetection(
+export async function captureVideoFrameForDetection(
   video: HTMLVideoElement,
   options: { maxDimension?: number; quality?: number } = {},
-): DetectionFrame | null {
+): Promise<DetectionFrame | null> {
   if (video.readyState !== video.HAVE_ENOUGH_DATA) return null;
   const w = video.videoWidth || 0;
   const h = video.videoHeight || 0;
@@ -156,6 +211,7 @@ export function captureVideoFrameForDetection(
     image,
     scaleX: w / detectW,
     scaleY: h / detectH,
+    fingerprint: await _frameFingerprint(video, w, h),
   };
 }
 
@@ -168,7 +224,7 @@ export function resizeDataUrlForDetection(
 ): Promise<DetectionFrame | null> {
   return new Promise((resolve) => {
     const img = new Image();
-    img.onload = () => {
+    img.onload = async () => {
       const w = sourceWidth > 0 ? sourceWidth : img.naturalWidth;
       const h = sourceHeight > 0 ? sourceHeight : img.naturalHeight;
       if (w <= 0 || h <= 0) {
@@ -187,6 +243,7 @@ export function resizeDataUrlForDetection(
         image,
         scaleX: w / detectW,
         scaleY: h / detectH,
+        fingerprint: await _frameFingerprint(img, w, h),
       });
     };
     img.onerror = () => resolve(null);

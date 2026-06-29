@@ -13,6 +13,11 @@
 //   wet_floor_sign    | llm                | databricks-claude-* (foundation)
 //   pizza_inventory   | llm                | databricks-claude-* (foundation)
 //   pizza_pie         | llm                | databricks-claude-* (foundation)
+//   pump_bagged       | llm                | databricks-claude-* (foundation)
+//   pump_active       | llm                | databricks-claude-* (foundation)
+//   beer_full         | llm                | databricks-claude-* (foundation)
+//   beer_half         | llm                | databricks-claude-* (foundation)
+//   beer_low          | llm                | databricks-claude-* (foundation)
 //   slip_fall         | slip_fall          | lensiq-slip-fall
 //   fog_detector      | fog_detector       | lensiq-fog-detector
 //
@@ -98,6 +103,64 @@ export const MODELS: ModelDefinition[] = [
     provider: "databricks",
     servingAlias: "llm",
     color: "#f59e0b",
+  },
+  // Gas-station pump out-of-service pair. A bag/cover tied over a fuel
+  // nozzle is the universal "pump down" signal on a forecourt. Both models
+  // go through one Claude vision call per frame (identical labels + prompt
+  // -> image-hash cache hit on the second /api/detect). The Pump Status
+  // page calls both in parallel each tick so the operator sees how many
+  // dispensers are bagged (out of service) vs clear (active) and the live
+  // out-of-service rate. See server/server.ts VISION_GROUPS for the shared
+  // prompt and ./samples.ts -> "pump-bag-montage" for the canonical clip.
+  {
+    id: "pump_bagged",
+    name: "Bagged pumps (out of service)",
+    description: "Detects fuel dispensers with a bag or cover tied over the nozzle - the standard out-of-service marker on a gas-station forecourt - via a Databricks-hosted Claude vision call. Each bagged pump gets its own bounding box; the count is the out-of-service dispenser total.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#dc2626",
+  },
+  {
+    id: "pump_active",
+    name: "Active pumps",
+    description: "Counts fuel dispensers whose nozzles are clear and in service using the same Databricks-hosted Claude vision call as the bagged-pump detector. Paired with pump_bagged to give an operator both `out of service` and `active` dispenser counts - and the out-of-service rate - from one round-trip.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#16a34a",
+  },
+  // Bar / table-service beer fill-level trio. A camera over guests' beer
+  // glasses classifies each glass by how much beer is left so staff can
+  // offer a refill before a guest has to flag someone down. All three
+  // models go through one Claude vision call per frame (identical labels +
+  // prompt -> image-hash / perceptual cache hit on the 2nd and 3rd
+  // /api/detect). The Beer Service page calls all three in parallel each
+  // tick: each glass's fill bucket renders on its bbox, and the buckets roll
+  // up into an average fill level plus a "running low" refill count. See
+  // server/server.ts VISION_GROUPS for the shared prompt and ./samples.ts ->
+  // "bar-table-montage" for the canonical clip.
+  {
+    id: "beer_full",
+    name: "Full beers",
+    description: "Detects beer glasses that are mostly to completely full (roughly two-thirds or more) via a Databricks-hosted Claude vision call. Each full glass gets its own bounding box; paired with beer_half and beer_low to classify every glass on the table by fill level.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#16a34a",
+  },
+  {
+    id: "beer_half",
+    name: "Half beers",
+    description: "Counts beer glasses that are roughly half full (about one-third to two-thirds) using the same Databricks-hosted Claude vision call as the other beer fill detectors. The middle bucket between beer_full and beer_low.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#f59e0b",
+  },
+  {
+    id: "beer_low",
+    name: "Low beers (refill soon)",
+    description: "Detects beer glasses running low or nearly empty (under about one-third) using the same Databricks-hosted Claude vision call as the other beer fill detectors. These are the refill candidates the Beer Service page counts so staff can offer another round.",
+    provider: "databricks",
+    servingAlias: "llm",
+    color: "#dc2626",
   },
   {
     id: "slip_fall",

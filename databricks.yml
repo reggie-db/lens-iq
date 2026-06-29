@@ -69,7 +69,7 @@ variables:
   # reach.
   catalog:
     description: Existing Unity Catalog catalog name. Must already exist in the target workspace.
-    default: reggie_pierce_dais_catalog
+    default: reggie_pierce_7405614800873570
   schema:
     description: Schema for demo tables and the frame volume (created by the bundle).
     default: lens_iq
@@ -128,16 +128,16 @@ variables:
   # Single scope holds every secret the deploy needs. Scope itself is
   # declared in resources/secret_scope.yml; secret VALUES are put by
   # scripts/deploy.sh on first deploy (it reads ROBOFLOW_API_KEY and
-  # PORTR_TOKEN from the operator's env or prompts for them).
+  # TUNNEL_TOKEN from the operator's env or prompts for them).
   secret_scope:
-    description: Databricks secret scope holding roboflow_api_key and portr_token.
+    description: Databricks secret scope holding roboflow_api_key and tunnel_token.
     default: lens-iq
   roboflow_secret_key:
     description: Key inside `secret_scope` that holds the Roboflow API key (cold-start license check on Roboflow detector endpoints).
     default: roboflow_api_key
   apps_tunnel_secret_key:
-    description: Key inside `secret_scope` that holds the portr client token (used only when PUBLIC_DOMAIN is set).
-    default: portr_token
+    description: Key inside `secret_scope` that holds the portr cli auth token (used only when TUNNEL_SUBDOMAIN is set).
+    default: tunnel_token
 
   # ─── Lakebase Autoscaling postgres binding ────────────────────────────
   # The bundle creates the project (resources/lakebase.yml) which

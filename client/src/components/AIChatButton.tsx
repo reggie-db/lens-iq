@@ -1,18 +1,19 @@
 import { useState } from "react";
 import {
-  Button, GenieChat,
+  Button,
   Sheet, SheetContent, SheetTrigger,
 } from "@databricks/appkit-ui/react";
+import { MastraChat } from "@dbx-tools/appkit-mastra-ui/react";
 import { MessageCircle, Sparkles } from "lucide-react";
 import { ApertureIcon } from "./LensIQLogo";
 
-// Floating chat button that opens a sheet hosting the AppKit <GenieChat>
-// component. GenieChat talks to the LensIQ Detections Genie space via the
-// genie() plugin (server/server.ts), so questions are answered against the
-// live UC tables instead of a free-text LLM. The `default` alias matches the
-// space the plugin registers from DATABRICKS_GENIE_SPACE_ID.
-
-const GENIE_ALIAS = "default";
+// Floating chat button that opens a sheet hosting the <MastraChat> drop-in
+// from @dbx-tools/appkit-mastra-ui. It wires itself from the mastra() plugin
+// mounted in server/server.ts (the `lensiq` agent), streaming over
+// @mastra/client-js and driving the LensIQ Detections Genie space through
+// the agent's Genie tools - so questions are still answered against the live
+// UC tables, now with tool-session progress, inline charts/tables, and
+// starter questions auto-sourced from the space's sample_questions.
 
 export function AIChatButton() {
   const [open, setOpen] = useState(false);
@@ -37,11 +38,7 @@ export function AIChatButton() {
           <Sparkles className="w-4 h-4 text-lava-600" />
         </div>
         <div className="flex-1 min-h-0">
-          <GenieChat
-            alias={GENIE_ALIAS}
-            placeholder="Ask about temperatures, alerts, plates, detections, or inventory..."
-            className="h-full"
-          />
+          <MastraChat showModelPicker />
         </div>
       </SheetContent>
     </Sheet>

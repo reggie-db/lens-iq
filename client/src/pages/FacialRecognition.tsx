@@ -566,7 +566,7 @@ function FaceMatchFeed({ isActive, enrolled }: FaceMatchFeedProps) {
   const tick = useCallback(async () => {
     const video = videoRef.current;
     if (!video || cameraStatus.kind !== "ready") return;
-    const frame = captureVideoFrameForDetection(video, { maxDimension: 640, quality: 0.72 });
+    const frame = await captureVideoFrameForDetection(video, { maxDimension: 640, quality: 0.72 });
     if (!frame) return;
     const start = Date.now();
     try {

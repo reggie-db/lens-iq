@@ -6,12 +6,12 @@ env:
     value: production
   # ─── Unity Catalog target ────────────────────────────────────────────
   # Server constants (server/uc.ts) and direct analytics.query() calls
-  # read these at runtime. KEEP IN SYNC with databricks.yml::variables
-  # (catalog/schema) and with the `.env` defaults. DABs only interpolates
-  # bundle vars inside app.yaml as of CLI 0.283.0+; treat these as
-  # literals you swap when you move workspaces.
+  # read these at runtime. NOTE: DABs does NOT interpolate ${var.*} inside a
+  # standalone app.yaml (only inside databricks.yml's resources.apps.*.config
+  # block), so these are literals you swap per workspace with
+  # scripts/swap-uc.sh. KEEP IN SYNC with databricks.yml::variables and .env.
   - name: DATABRICKS_CATALOG
-    value: reggie_pierce_dais_catalog
+    value: reggie_pierce_7405614800873570
   - name: DATABRICKS_SCHEMA
     value: lens_iq
   # ─── Genie space ─────────────────────────────────────────────────────
@@ -19,26 +19,31 @@ env:
   # reads this env var and registers the space under the `default` alias
   # (see server/server.ts and client/src/components/AIChatButton.tsx). The
   # app SP gets CAN_RUN on the space via the `genie_space` resource binding
-  # in resources/app.yml. Literal here for the same reason as catalog/schema
-  # above: DABs only interpolates bundle vars inside app.yaml on newer CLIs.
-  # KEEP IN SYNC with databricks.yml::variables.genie_space_id.
+  # in resources/app.yml. Literal for the same reason as catalog/schema
+  # above (no ${var} interpolation in standalone app.yaml); swap per
+  # workspace. KEEP IN SYNC with databricks.yml::variables.genie_space_id.
   - name: DATABRICKS_GENIE_SPACE_ID
     value: 01f1648d45ec15bebd112142c2c897db
   # ─── Public tunnel (opt-in) ──────────────────────────────────────────
-  # scripts/start.sh installs portr and registers a tunnel only when
-  # PUBLIC_DOMAIN is set. The leftmost label of PUBLIC_DOMAIN becomes the
-  # portr subdomain; the rest becomes the portr server host. Setting
-  # PUBLIC_DOMAIN=lensiq.apps.dbx.tools points the tunnel at the
-  # apps.dbx.tools portr server with subdomain `lensiq`.
+  # scripts/start.sh downloads the portr client (https://github.com/amalshaji/portr)
+  # and opens a tunnel only when TUNNEL_SUBDOMAIN is set. portr dials the
+  # portr server (TUNNEL_SERVER) over SSH and serves public visitor traffic at
+  # https://<TUNNEL_SUBDOMAIN>.<TUNNEL_SERVER>, forwarding it to the local app
+  # on DATABRICKS_APP_PORT.
   #
-  # To opt OUT of the public tunnel: remove (or comment out) BOTH the
-  # PUBLIC_DOMAIN env var below AND the `portr_token` resource binding in
-  # resources/app.yml. With no PUBLIC_DOMAIN, start.sh skips the portr
+  # TUNNEL_TOKEN is REQUIRED here: it is the portr cli auth token (config
+  # secret_key). Without it the portr handshake fails and no tunnel comes up.
+  # It is backed by the `tunnel_token` resource binding in resources/app.yml.
+  #
+  # To opt OUT of the public tunnel: remove (or comment out) the
+  # TUNNEL_SUBDOMAIN env var below. With it unset, start.sh skips the portr
   # install entirely and just runs node.
-  - name: PUBLIC_DOMAIN
-    value: lensiq.apps.dbx.tools
-  - name: PORTR_TOKEN
-    valueFrom: portr_token
+  - name: TUNNEL_SUBDOMAIN
+    value: lensiq
+  - name: TUNNEL_SERVER
+    value: apps.dbx.tools
+  - name: TUNNEL_TOKEN
+    valueFrom: tunnel_token
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares

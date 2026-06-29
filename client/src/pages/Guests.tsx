@@ -362,7 +362,7 @@ function GuestFeed({
     const tick = async () => {
       const video = videoRef.current;
       if (inFlightRef.current || !video) return;
-      const frame = captureVideoFrameForDetection(video);
+      const frame = await captureVideoFrameForDetection(video);
       if (!frame) return;
       inFlightRef.current = true;
       const tickIdx = ++tickIdxRef.current;

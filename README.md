@@ -196,15 +196,16 @@ the same list with rationale):
      database (`resources/lakebase.yml`)
    - App resource bindings (`resources/app.yml`) for the warehouse,
      every serving endpoint, the Lakebase database, the four volumes,
-     and the portr secret
+     and the optional tunnel-token secret
    - Lakeflow Spark Declarative Pipeline (`resources/pipeline.yml`)
    - Jobs for seed data + per-detector deploys + pipeline simulator
      (defined inline in `databricks.yml::resources.jobs`)
 2. **`databricks secrets put-secret`** for `roboflow_api_key` and
-   `portr_token`. Values are read from `ROBOFLOW_API_KEY` and
-   `PORTR_TOKEN` env vars; empty values skip with a warning so the
-   downstream deploy job (or public tunnel) fails loudly rather than
-   silently shipping a half-configured endpoint.
+   `tunnel_token`. Values are read from `ROBOFLOW_API_KEY` and
+   `TUNNEL_TOKEN` env vars; empty values skip with a warning. The
+   `tunnel_token` is only needed when the portr tunnel is enabled, but a
+   missing `roboflow_api_key` lets the downstream deploy job fail loudly
+   rather than silently shipping a half-configured endpoint.
 3. **`scripts/sync-sample-videos.sh`** + **`sync-presenter-content.sh`**
    push the bytes that DABs deliberately leaves out of the bundle
    upload (MP4s > 10MB per file, talk-track markdown that re-reads at
@@ -247,7 +248,7 @@ ENV
 # Optional: secret values. Missing values skip with a warning; you can
 # always re-run scripts/deploy.sh later with them set.
 export ROBOFLOW_API_KEY=<roboflow-key>   # for license-plate + slip/fall
-export PORTR_TOKEN=<portr-client-token>  # only if you want the public tunnel
+export TUNNEL_TOKEN=<portr-cli-token>    # required only if the portr tunnel is enabled
 
 scripts/deploy.sh -t dev
 ```
@@ -309,49 +310,51 @@ The script intentionally does NOT rename bundle resource IDs
 
 The Databricks Apps default URL goes through the workspace SSO redirect,
 which makes screen-recording a demo and sharing a link with a customer
-painful. To bypass that, the app can register a portr
-(https://portr.dev) tunnel from inside the container and serve the same
-bytes at a public HTTPS URL.
+painful. To bypass that, the app can register a
+[portr](https://github.com/amalshaji/portr) client from inside the
+container against the portr server and serve the same bytes at a stable
+public HTTPS URL (e.g. `https://lensiq.apps.dbx.tools`).
 
-**Opt-in is via two env vars in `app.yaml`:**
+**Opt-in on the app side is via env vars in `app.yaml`:**
 
 ```yaml
-- name: PUBLIC_DOMAIN
-  value: lensiq.apps.dbx.tools
-- name: PORTR_TOKEN
-  valueFrom: portr_token       # resource binding in resources/app.yml
+- name: TUNNEL_SUBDOMAIN
+  value: lensiq                  # -> https://lensiq.<TUNNEL_SERVER>
+- name: TUNNEL_SERVER
+  value: apps.dbx.tools          # portr server_url
+- name: TUNNEL_TOKEN
+  valueFrom: tunnel_token        # required; resource binding in resources/app.yml
 ```
 
-`scripts/start.sh` reads `PUBLIC_DOMAIN` at boot and:
+`scripts/start.sh` reads `TUNNEL_SUBDOMAIN` at boot and:
 
-- Parses the leftmost dotted label as the **portr subdomain and tunnel
-  name** (e.g. `lensiq.apps.dbx.tools` → subdomain `lensiq`).
-- Parses the rest as the **portr server host** (e.g. `apps.dbx.tools`).
-- Installs portr from `https://install.portr.dev` into the per-container
-  `$HOME/.portr/bin` (idempotent across cold starts).
-- Renders `~/.portr/config.yaml` from `PORTR_TOKEN` + `DATABRICKS_APP_PORT`.
-- Backgrounds `portr start` alongside the node entrypoint and supervises
-  both with the same SIGTERM + SIGKILL grace path.
+- Downloads the portr client from the pinned GitHub release
+  (`PORTR_VERSION`, default `1.0.13`) into the per-container
+  `$HOME/.portr/bin` (idempotent across cold starts - skips when the
+  on-disk binary already matches). The release zip is extracted with
+  `unzip`, falling back to `python3 -m zipfile` on slim runtimes.
+- Renders `~/.portr/config.yaml` with `server_url` = `TUNNEL_SERVER`,
+  `ssh_url` = `TUNNEL_SSH` (default `${TUNNEL_SERVER}:4444`), `secret_key`
+  = `TUNNEL_TOKEN`, and the dashboard + TUI disabled (no interactive
+  terminal in the Apps runtime).
+- Backgrounds `portr http <DATABRICKS_APP_PORT> -s <TUNNEL_SUBDOMAIN>`
+  alongside the node entrypoint and supervises both with the same SIGTERM
+  + SIGKILL grace path.
 
-**To opt out**, remove the `PUBLIC_DOMAIN` and `PORTR_TOKEN` entries from
-`app.yaml` and the `portr_token` resource from `resources/app.yml`. With
-`PUBLIC_DOMAIN` unset, `scripts/start.sh` skips the portr install
+**`TUNNEL_TOKEN` is required.** It is the portr cli auth token (config
+`secret_key`); without it portr's handshake fails and no tunnel comes up.
+The subdomain must be reserved for the account that owns the token on the
+portr server.
+
+**To opt out**, remove (or comment out) the `TUNNEL_SUBDOMAIN` env var
+in `app.yaml`. With it unset, `scripts/start.sh` skips the portr install
 completely and just runs node. The app stays reachable at its standard
 Databricks Apps workspace URL.
 
-**To point at a different host**, change the values:
-
-```yaml
-- name: PUBLIC_DOMAIN
-  value: <your-subdomain>.<your-portr-server>
-- name: PORTR_TOKEN
-  valueFrom: portr_token       # secret key/scope live in databricks.yml
-```
-
-The portr-server secret itself is held in the Databricks secret store -
-scope and key are bundle variables
-(`apps_tunnel_secret_scope` / `apps_tunnel_secret_key` in
-`databricks.yml`). Update them to point at your own portr token.
+The auth token is held in the Databricks secret store - scope and key are
+bundle variables (`secret_scope` / `apps_tunnel_secret_key` in
+`databricks.yml`, default key `tunnel_token`). `scripts/deploy.sh` pushes
+the value from the `TUNNEL_TOKEN` env var (read from `.env`).
 
 ## Project layout
 

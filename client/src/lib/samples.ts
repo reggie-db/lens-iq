@@ -22,6 +22,14 @@
 
 import type { ModelDefinition } from "./models";
 
+// Slowed playback speed for the LLM-vision demo pages (Spills, Pizza, Pump,
+// Beer, ...). Claude vision costs 3-5s per uncached frame, so at 1x the
+// overlay falls behind and every captured frame is a fresh scene (zero cache
+// reuse). Playing at ~0.5x lets the detector keep pace and makes consecutive
+// captures similar enough that the server's perceptual-hash cache collapses
+// them onto one model call. Tune toward 1 for liveliness, lower for accuracy.
+export const VISION_PLAYBACK_RATE = 0.5;
+
 export interface SampleVideo {
   id: string;
   name: string;
@@ -35,6 +43,18 @@ export interface SampleVideo {
 }
 
 export const SAMPLE_VIDEOS: SampleVideo[] = [
+  // Booth "live feed". Surfaced under the Live page's "Live" group (not the
+  // "Sample clips" group) and used as the default source there in place of the
+  // device webcam, so an unattended booth display shows a recognizable Data +
+  // AI Summit expo-floor crowd that the general YOLO detector boxes as people.
+  // ~14s loop cut from official Summit expo-hall b-roll.
+  {
+    id: "expo-floor",
+    name: "Databricks Summit expo floor",
+    description: "Crowds walking the Data + AI Summit exhibition hall: booth aisles and the main expo floor. Default Live source for booth displays; YOLO boxes the attendees as people.",
+    local: "databricks-summit-expo-floor.mp4",
+    models: ["yolo"],
+  },
   {
     id: "vehicles",
     name: "Highway traffic",
@@ -286,6 +306,39 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     description: "Counter camera over a partially-sliced pepperoni pizza with diners lifting wedges off the board. Each visible slice becomes a separate Claude vision bbox, and the count of detections IS the available-slice estimate driving hot-hold restock alerts.",
     local: "pizza-slice-inventory.mp4",
     models: ["pizza_inventory", "pizza_pie", "yolo"],
+  },
+
+  // ---------------------------------------------------------------------------
+  // Gas-station pump out-of-service detection. A bag (or plastic cover) tied
+  // over a fuel nozzle/dispenser is the universal "pump is down" signal on a
+  // forecourt. This montage cuts together multiple pump angles where some
+  // dispensers are bagged (out of service) and others are clear (active), so
+  // the pump_bagged / pump_active Claude vision pair can count both per frame
+  // and the Pump Status page can surface a live out-of-service rate.
+  // ---------------------------------------------------------------------------
+  {
+    id: "pump-bag-montage",
+    name: "Gas pump bags - out of service (montage)",
+    description: "Montage of forecourt fuel dispensers, some with bags/covers tied over the nozzles (out of service) and some clear (active). Drives the pump_bagged + pump_active Claude vision pair: each bagged nozzle and each clear nozzle becomes its own bbox, and the counts feed the live out-of-service rate.",
+    local: "pump-bag-montage.mp4",
+    models: ["pump_bagged", "pump_active", "yolo"],
+  },
+
+  // ---------------------------------------------------------------------------
+  // Bar / table-service beer fill tracking. A ceiling/table camera over guests'
+  // beer glasses. Each glass is classified by how much beer is left - full,
+  // half, or low - so staff can spot a guest running low and offer a refill
+  // before being flagged down. The beer_full / beer_half / beer_low Claude
+  // vision trio share one call per frame; the Beer Service page renders each
+  // glass's fill bucket on its bbox and rolls the buckets up into an average
+  // fill level and a "needs refill" count.
+  // ---------------------------------------------------------------------------
+  {
+    id: "bar-table-montage",
+    name: "Bar table - beer fill levels (montage)",
+    description: "Montage of bar/restaurant tables with beer glasses at varying fill levels. Drives the beer_full + beer_half + beer_low Claude vision trio: every glass becomes its own bbox tagged with how full it is, and the counts roll up into an average fill level and a live count of glasses running low (refill candidates).",
+    local: "bar-table-montage.mp4",
+    models: ["beer_full", "beer_half", "beer_low", "yolo"],
   },
 ];
 
