@@ -139,14 +139,15 @@ resources:
             securable_type: VOLUME
             permission: READ_VOLUME
         # portr cli auth token (config secret_key) for the public tunnel.
-        # app.yaml reads it with `TUNNEL_TOKEN: valueFrom: tunnel_token`, and
-        # `valueFrom` only resolves against a resource of this exact name. The
+        # app.yaml reads it with `TUNNEL_TOKEN: valueFrom: apps_dbx_tools_token`,
+        # and `valueFrom` only resolves against a resource of this exact name -
+        # so the resource NAME here must match the env var's valueFrom. The
         # token is REQUIRED: portr's handshake fails without it, so the tunnel
         # never comes up. Scope + key come from the bundle vars so they track
         # the deploy; the value is put into the scope by scripts/deploy.sh /
         # `secrets put-secret`. Only relevant when TUNNEL_SUBDOMAIN is set in
         # app.yaml.
-        - name: tunnel_token
+        - name: apps_dbx_tools_token
           secret:
             scope: ${var.secret_scope}
             key: ${var.apps_tunnel_secret_key}

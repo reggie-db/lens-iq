@@ -43,7 +43,7 @@ env:
   - name: TUNNEL_SERVER
     value: apps.dbx.tools
   - name: TUNNEL_TOKEN
-    valueFrom: tunnel_token
+    valueFrom: apps_dbx_tools_token
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares

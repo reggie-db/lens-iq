@@ -335,11 +335,14 @@ public HTTPS URL (e.g. `https://lensiq.apps.dbx.tools`).
   `unzip`, falling back to `python3 -m zipfile` on slim runtimes.
 - Renders `~/.portr/config.yaml` with `server_url` = `TUNNEL_SERVER`,
   `ssh_url` = `TUNNEL_SSH` (default `${TUNNEL_SERVER}:4444`), `secret_key`
-  = `TUNNEL_TOKEN`, and the dashboard + TUI disabled (no interactive
-  terminal in the Apps runtime).
-- Backgrounds `portr http <DATABRICKS_APP_PORT> -s <TUNNEL_SUBDOMAIN>`
-  alongside the node entrypoint and supervises both with the same SIGTERM
-  + SIGKILL grace path.
+  = `TUNNEL_TOKEN`, the dashboard + TUI disabled (no interactive terminal
+  in the Apps runtime), and a `tunnels:` entry pinning the subdomain to
+  `DATABRICKS_APP_PORT`.
+- Backgrounds `portr start <TUNNEL_SUBDOMAIN>` alongside the node
+  entrypoint and supervises both with the same SIGTERM + SIGKILL grace
+  path. (The flag form `portr http <port> -s <sub>` is **not** used - it
+  ignores the requested subdomain and the server hands back a random one;
+  only the config `tunnels:` block + `portr start` pins the subdomain.)
 
 **`TUNNEL_TOKEN` is required.** It is the portr cli auth token (config
 `secret_key`); without it portr's handshake fails and no tunnel comes up.

@@ -83,8 +83,14 @@ if [[ -n "${TUNNEL_SUBDOMAIN:-}" ]]; then
 
   # portr reads server_url / ssh_url / secret_key from this config for auth.
   # secret_key (TUNNEL_TOKEN) is required: without it the cli handshake fails
-  # and the tunnel never comes up. The dashboard + TUI are disabled because
-  # there is no interactive terminal in the Apps runtime.
+  # with "Invalid secret key" and the tunnel never comes up. The dashboard +
+  # TUI are disabled because there is no interactive terminal in the Apps
+  # runtime.
+  #
+  # The requested subdomain MUST be pinned through a `tunnels:` block and
+  # started with `portr start <name>`. The flag form (`portr http <port> -s
+  # <sub>`) silently ignores the subdomain and the server hands back a random
+  # one instead, so it is not used here.
   mkdir -p "${HOME}/.portr"
   {
     printf 'server_url: %s\n' "${_tunnel_server}"
@@ -94,9 +100,13 @@ if [[ -n "${TUNNEL_SUBDOMAIN:-}" ]]; then
     fi
     printf 'disable_dashboard: true\n'
     printf 'disable_tui: true\n'
+    printf 'tunnels:\n'
+    printf '  - name: %s\n' "${TUNNEL_SUBDOMAIN}"
+    printf '    subdomain: %s\n' "${TUNNEL_SUBDOMAIN}"
+    printf '    port: %s\n' "${DATABRICKS_APP_PORT}"
   } > "${HOME}/.portr/config.yaml"
 
-  portr http "${DATABRICKS_APP_PORT}" -s "${TUNNEL_SUBDOMAIN}" &
+  portr start "${TUNNEL_SUBDOMAIN}" &
   _tunnel_pid=$!
   echo "[start] portr tunneling https://${TUNNEL_SUBDOMAIN}.${_tunnel_server} -> :${DATABRICKS_APP_PORT} (pid=${_tunnel_pid})" >&2
 fi
