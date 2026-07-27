@@ -149,19 +149,6 @@ resources:
             securable_full_name: ${var.catalog}.${var.schema}.presenter_content
             securable_type: VOLUME
             permission: READ_VOLUME
-        # frp auth token for the public tunnel. app.yaml reads it with
-        # `TUNNEL_TOKEN: valueFrom: tunnel_token`, and `valueFrom` only resolves
-        # against a resource of this exact name. The token is OPTIONAL: when
-        # empty the tunnel still comes up with no auth, so this binding only
-        # matters when the frps server is configured to require a token. Scope
-        # + key come from the bundle vars so they track the deploy; the value
-        # is put into the scope by scripts/deploy.sh / `secrets put-secret`.
-        # Only relevant when AZURE_CONTAINER_APPS is set in app.yaml.
-        - name: tunnel_token
-          secret:
-            scope: ${var.secret_scope}
-            key: ${var.apps_tunnel_secret_key}
-            permission: READ
         # SMTP password for the agent's approval-gated send_email tool
         # (@dbx-tools/email). app.yaml reads it with
         # `SMTP_PASSWORD: valueFrom: smtp_password`, and `valueFrom` only

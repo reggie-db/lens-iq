@@ -58,9 +58,6 @@ Thumbs.db
 tmp/
 .cache/
 
-# frp client state (HOME=$PWD/.home in scripts/start.sh)
-.home/
-
 # Rendered analytics queries. config/queries/*.sql.tmpl are the source of
 # truth (with ${catalog}/${schema} placeholders); server/uc.ts renders the
 # *.sql at boot from DATABRICKS_CATALOG / DATABRICKS_SCHEMA.

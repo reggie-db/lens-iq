@@ -32,9 +32,7 @@ companion to the architectural notes in `README.md`.
   schema under an existing catalog).
 - A **Claude serving endpoint** (e.g. `databricks-claude-opus-4-...`) or
   override `llm_endpoint` at deploy time.
-- Optional: a **Roboflow API key** (license-plate + slip/fall detectors) and a
-  **self-hosted frps server behind an Azure Container Apps FQDN** if you want
-  the public tunnel.
+- Optional: a **Roboflow API key** (license-plate + slip/fall detectors).
 
 ---
 
@@ -71,7 +69,7 @@ and a few literal files that DABs can't interpolate.
 
    ```bash
    export ROBOFLOW_API_KEY=<roboflow-key>
-   # TUNNEL_TOKEN: only if your frps server requires auth (see section 5)
+   export SMTP_PASSWORD=<smtp-password>   # only if using send_email
    ```
 
 ---
@@ -82,14 +80,15 @@ and a few literal files that DABs can't interpolate.
 scripts/deploy.sh -t dev
 ```
 
-`deploy.sh` is idempotent and runs 8 phases: bundle deploy
+`deploy.sh` is idempotent and runs 9 phases: bundle deploy
 (schema/volumes/secret-scope/lakebase/jobs/pipeline + app) -> secrets ->
-volume sync -> Lakebase grants -> Genie space -> per-detector model deploys ->
+volume sync -> Lakebase grants -> Genie space -> UC/Genie/serving grants
+(`scripts/grant-app-access.sh`) -> per-detector model deploys ->
 `bundle run` -> app start. First run is ~10-15 min (cold-start endpoints warm
 in parallel); later runs are 30-60 s.
 
 If that completes without errors, you're done - skip to
-[Verify](#6-verify). If the bundle step errors with `terraform apply` /
+[Verify](#5-verify). If the bundle step errors with `terraform apply` /
 `failed to update app` / `project slug already exists`, use the manual path
 below.
 
@@ -110,11 +109,11 @@ APP=lens-iq
 SRC=/Workspace/Users/<you@example.com>/.bundle/lens-iq/dev/files
 
 # 4a. Push secrets into the bundle-owned scope (lens-iq).
-databricks secrets put-secret lens-iq tunnel_token   --string-value "$TUNNEL_TOKEN"   -p "$DATABRICKS_CONFIG_PROFILE"   # only if using the tunnel
 databricks secrets put-secret lens-iq roboflow_api_key --string-value "$ROBOFLOW_API_KEY" -p "$DATABRICKS_CONFIG_PROFILE" # only if using Roboflow
+databricks secrets put-secret lens-iq smtp_password --string-value "$SMTP_PASSWORD" -p "$DATABRICKS_CONFIG_PROFILE" # only if using email
 
 # 4b. Grant the app's service principal READ on the scope, or secret-backed
-#     env vars (TUNNEL_TOKEN, etc.) inject as empty strings.
+#     env vars (SMTP_PASSWORD, etc.) inject as empty strings.
 SP=$(databricks apps get "$APP" -p "$DATABRICKS_CONFIG_PROFILE" --output json | jq -r '.service_principal_client_id')
 databricks secrets put-acl lens-iq "$SP" READ -p "$DATABRICKS_CONFIG_PROFILE"
 
@@ -139,71 +138,7 @@ scripts/grant-lakebase-schema.sh
 
 ---
 
-## 5. Public tunnel (frp / Azure Container Apps) - optional
-
-The Databricks Apps default URL goes through the workspace SSO redirect, which
-is awkward for demos. LensIQ can publish itself to a stable vanity URL through
-[frp](https://github.com/fatedier/frp): the app runs `frpc` and dials a
-self-hosted `frps` server fronted by Azure Container Apps. This is **opt-in**
-and requires your own `frps` deployment behind an Azure Container Apps FQDN.
-
-### How it's wired
-
-- `app.yaml` enables it with two env vars:
-
-  ```yaml
-  - name: AZURE_CONTAINER_APPS
-    value: lensiq.<region>.azurecontainerapps.io   # frps FQDN (also the public URL)
-  - name: TUNNEL_TOKEN
-    valueFrom: tunnel_token                        # optional secret resource (see below)
-  ```
-
-  `AZURE_CONTAINER_APPS` is the Azure Container Apps FQDN that fronts `frps`.
-  The platform terminates TLS on `:443`; the same FQDN is used as the `frpc`
-  `serverAddr` and the vhost `customDomain`, so one URL both carries the
-  client connection and serves public traffic (frps port-reuse).
-
-- `scripts/start.sh` (the Apps boot wrapper) sees `AZURE_CONTAINER_APPS`,
-  downloads the pinned `frpc` (`FRP_VERSION`, default `0.68.1`) into a writable
-  per-container dir, renders `~/.frp/frpc.toml` (`serverAddr`/`serverPort=443`/
-  `transport.protocol="wss"` + an `http` proxy on `DATABRICKS_APP_PORT` with
-  `customDomains` = the FQDN and an optional `auth.token`), and backgrounds
-  `frpc` next to node.
-
-### To enable it for your workspace
-
-1. **Stand up an `frps` server** behind an Azure Container Apps FQDN (TLS
-   terminated on `:443`, port-reuse for vhost HTTP). Note its FQDN and, if you
-   configured `auth.token`, that shared token.
-2. **Set `AZURE_CONTAINER_APPS`** in `app.yaml` to that FQDN.
-3. **(Optional) store the auth token as a secret.** It is only needed when your
-   `frps` requires auth. The secret **resource name** must match `app.yaml`'s
-   `valueFrom` (`tunnel_token` by default, backed by `resources/app.yml`):
-
-   ```bash
-   databricks secrets put-secret <scope> <key> --string-value "$TUNNEL_TOKEN" -p <PROFILE>
-   ```
-
-4. Redeploy the app code (section 4d). Confirm the tunnel came up:
-
-   ```bash
-   databricks apps logs lens-iq -p <PROFILE> | grep -E "\[start\] frpc|start proxy success"
-   curl -s -o /dev/null -w "%{http_code}\n" https://<fqdn>/
-   ```
-
-### To turn it OFF
-
-Remove (or comment out) the `AZURE_CONTAINER_APPS` env var in `app.yaml` and
-redeploy. `start.sh` then skips the frp install entirely and just runs node;
-the app stays reachable at its standard Databricks Apps URL.
-
-> Genie chat ("Ask LensIQ") is intentionally hidden over the tunnel: it needs
-> the on-behalf-of-user token that the Apps SSO proxy injects, which is absent
-> on tunnel traffic. `/api/auth/obo` returns `{"obo":false}` there.
-
----
-
-## 6. Verify
+## 5. Verify
 
 ```bash
 PROFILE=<YOUR_PROFILE>
@@ -214,7 +149,7 @@ databricks apps get lens-iq -p "$PROFILE" --output json | jq -r '.app_status.mes
 # Tail app logs (build + boot + plugin init).
 databricks apps logs lens-iq -p "$PROFILE" | tail -40
 
-# Open the app's standard URL (always works):
+# Open the app's standard URL:
 databricks apps get lens-iq -p "$PROFILE" --output json | jq -r '.url'
 ```
 
@@ -228,8 +163,6 @@ databricks apps get lens-iq -p "$PROFILE" --output json | jq -r '.url'
 | `failed to update app ... Compute size updates are not supported in this update API` | The terraform provider uses the legacy app-update API, which rejects `compute_size` in the update mask. | Use the manual path (section 4): `databricks apps deploy` pushes code without going through that API. |
 | `failed to create postgres_project ... project slug already exists` | The Lakebase project exists in the workspace but isn't tracked in terraform state (drift). | Left as drift; the app already uses the existing project. Don't recreate it. The manual path skips this. |
 | `failed to get workspace client ... forced token refresh: ... exit status 45` | Transient OS-keyring race when the CLI refreshes the OAuth token under concurrent access. | Just retry the command. `databricks auth token -p <PROFILE>` confirms the token is actually fine. |
-| Tunnel never comes up / `frpc` exits immediately | `frps` server behind `AZURE_CONTAINER_APPS` is down, the FQDN is wrong, or the ingress isn't doing TLS-terminated port-reuse for the vhost. | Verify the FQDN resolves and `frps` is running; `frpc` uses `transport.protocol="wss"` so the ingress must terminate TLS on `:443`. |
-| `frpc` logs `authorization failed` / `token in login doesn't match` | `frps` is configured with an `auth.token` but the app injected an empty/wrong `TUNNEL_TOKEN` (secret **resource name** mismatch or SP lacks READ on the scope). | Store the matching token (section 5 step 3) and grant the SP READ (section 4b), then redeploy - or drop `auth.token` from `frps` to run unauthed. |
 | Serving endpoint keep-alive appears inactive | `SERVING_ENDPOINT_KEEP_ALIVE=false`, no endpoint env vars are configured, or the current time is outside the configured business-hours window. | Check `.env` / `app.yaml` and `server/serving-keepalive.ts`. Keep-alive requests use the raw authenticated workspace client and intentionally swallow the model's empty-payload response. |
 
 ---

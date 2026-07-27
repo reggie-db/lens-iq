@@ -129,16 +129,13 @@ variables:
   # Single scope holds every secret the deploy needs. Scope itself is
   # declared in resources/secret_scope.yml; secret VALUES are put by
   # scripts/deploy.sh on first deploy (it reads ROBOFLOW_API_KEY and
-  # TUNNEL_TOKEN from the operator's env or prompts for them).
+  # SMTP_PASSWORD from the operator's env).
   secret_scope:
-    description: Databricks secret scope holding roboflow_api_key and tunnel_token.
+    description: Databricks secret scope holding roboflow_api_key and smtp_password.
     default: lens-iq
   roboflow_secret_key:
     description: Key inside `secret_scope` that holds the Roboflow API key (cold-start license check on Roboflow detector endpoints).
     default: roboflow_api_key
-  apps_tunnel_secret_key:
-    description: Key inside `secret_scope` that holds the frp auth token (used only when AZURE_CONTAINER_APPS is set).
-    default: tunnel_token
 
   # ─── Lakebase Autoscaling postgres binding ────────────────────────────
   # The bundle creates the project (resources/lakebase.yml) which

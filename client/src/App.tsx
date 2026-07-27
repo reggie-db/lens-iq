@@ -224,8 +224,8 @@ function AppShell() {
 
   // The Genie chat talks to the space on the signed-in user's behalf, so in
   // production it only renders when the Databricks Apps proxy forwards a
-  // user token (hidden on the public frp tunnel). Local/dev always reports
-  // available so Genie stays in the demo while testing.
+  // user token. Local/dev always reports available so Genie stays in the
+  // demo while testing.
   const oboAvailable = useOboAvailable();
 
   // Presenter mode gates the booth-only Talk Track (/info) and Booth Deck

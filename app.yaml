@@ -25,27 +25,6 @@ env:
   # databricks.yml::variables.genie_space_id.
   - name: DATABRICKS_GENIE_SPACE_ID
     value: 01f186bee4ce16f1ac00f8b0df1c88d6
-  # ─── Public tunnel (opt-in) ──────────────────────────────────────────
-  # scripts/start.sh downloads frpc and registers a tunnel only when
-  # AZURE_CONTAINER_APPS is set. It is the native Azure Container Apps FQDN
-  # that fronts the self-hosted frps server; the platform terminates TLS on
-  # :443 with its managed cert and forwards to frps. The same FQDN doubles as
-  # the frpc serverAddr and the vhost customDomain, so one URL both carries
-  # the client connection and serves public traffic (frps port-reuse). The
-  # leftmost label becomes the frpc proxy name.
-  #
-  # TUNNEL_TOKEN is OPTIONAL - when present it is sent as the frp auth token
-  # (the frps server must match it); when empty the tunnel still comes up
-  # with no auth. The `tunnel_token` resource binding in resources/app.yml
-  # backs the valueFrom; drop both if you don't need auth.
-  #
-  # To opt OUT of the public tunnel: remove (or comment out) the
-  # AZURE_CONTAINER_APPS env var below. With it unset, start.sh skips the frp
-  # install entirely and just runs node.
-  - name: AZURE_CONTAINER_APPS
-    value: lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io
-  - name: TUNNEL_TOKEN
-    valueFrom: tunnel_token
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares

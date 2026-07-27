@@ -114,7 +114,7 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 // resource (sql, dashboards.genie, serving.serving-endpoints in
 // resources/app.yml) so the Apps proxy forwards `X-Forwarded-Access-Token`.
 // /api/auth/obo below only checks that header's presence so the UI can hide
-// the chat on the public frp tunnel (no OBO token there).
+// the chat when the request did not come through the Apps SSO proxy.
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
@@ -814,21 +814,17 @@ const AppKit = await createApp({
       // Reports whether this request carries an on-behalf-of-user token. The
       // Databricks Apps front-door proxy injects `X-Forwarded-Access-Token`
       // (the signed-in user's OAuth token) on every request once user
-      // authorization is enabled and the app declares user_api_scopes. The
-      // public frp tunnel (scripts/start.sh) terminates *inside* the
-      // container and forwards straight to this listener, bypassing that
-      // proxy, so the header is absent on tunnel traffic. The client uses
-      // this to hide the Genie chat (which depends on the user token) when
-      // the app is reached over the tunnel. Local/dev (NODE_ENV !==
-      // production) always reports true so Genie stays visible while
-      // testing. Header presence is the whole production signal - we never
-      // read the token value here.
+      // authorization is enabled and the app declares user_api_scopes.
+      // Requests that bypass that proxy have no header, so the client uses
+      // this to hide the Genie chat (which depends on the user token).
+      // Local/dev (NODE_ENV !== production) always reports true so Genie
+      // stays visible while testing. Header presence is the whole
+      // production signal - we never read the token value here.
       app.get("/api/auth/obo", (req, res) => {
         // Local `bun run dev` sets NODE_ENV=development and
         // never has an Apps-proxy OBO header. Always report available so the
         // Genie chat stays in the demo during local testing. Deployed apps
-        // set NODE_ENV=production (app.yaml) and keep the real header check
-        // so the public frp tunnel still hides Genie.
+        // set NODE_ENV=production (app.yaml) and keep the real header check.
         if (process.env.NODE_ENV !== "production") {
           res.json({ obo: true });
           return;

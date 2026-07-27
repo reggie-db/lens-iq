@@ -257,8 +257,10 @@ It:
 5. Applies Lakebase schema grants.
 6. Runs the synthetic seed job when `--seed` is set.
 7. Creates or updates the Genie space.
-8. Runs model deployment jobs for endpoints that are not already ready.
-9. Deploys and starts the Databricks App.
+8. Grants Unity Catalog, Genie, and serving access to the app service
+   principal and to workspace users (`scripts/grant-app-access.sh`).
+9. Runs model deployment jobs for endpoints that are not already ready.
+10. Deploys and starts the Databricks App.
 
 Useful controls:
 
@@ -267,6 +269,7 @@ scripts/deploy.sh --bundle-only
 scripts/deploy.sh --skip-sync
 scripts/deploy.sh --skip-grants
 scripts/deploy.sh --skip-genie
+scripts/deploy.sh --skip-app-grants
 scripts/deploy.sh --skip-jobs
 scripts/deploy.sh --skip-run
 ```
@@ -292,16 +295,6 @@ scripts/swap-uc.sh \
 The helper rewrites the catalog, schema, volume paths, and optional Genie ID.
 Update the remaining workspace-specific profile, warehouse, and secrets in
 `.env`, validate the bundle, and run the deployment script.
-
-### Public tunnel
-
-The deployed app can optionally start an frp client through
-`scripts/start.sh`. The current host is configured in `app.yaml`, not `.env`.
-`TUNNEL_TOKEN` is optional and is stored through the app's secret binding.
-See `DEPLOY_INSTRUCTIONS.md` for the server-side frp setup.
-
-Current configured public tunnel:
-[https://lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io](https://lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io)
 
 ## Repository layout
 

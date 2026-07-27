@@ -11,7 +11,7 @@
 #
 # Step ordering:
 #   1. Source .env so DATABRICKS_CONFIG_PROFILE (and any operator-supplied
-#      ROBOFLOW_API_KEY / TUNNEL_TOKEN) flow into the CLI.
+#      ROBOFLOW_API_KEY / SMTP_PASSWORD) flow into the CLI.
 #   2. `databricks bundle deploy` creates everything DABs supports:
 #        UC schema in the existing target catalog
 #        UC schema  (lens_iq)
@@ -24,7 +24,7 @@
 #          volumes, secret)
 #        Jobs (seed + per-detector deploys + pipeline simulator)
 #        Lakeflow Spark Declarative Pipeline.
-#   3. `secrets put-secret` for roboflow_api_key + tunnel_token + smtp_password if the values
+#   3. `secrets put-secret` for roboflow_api_key + smtp_password if the values
 #      are present in env vars. Missing values skip with a warning so the
 #      Roboflow detector deploy jobs are allowed to fail loudly later (the
 #      app keeps working without them).
@@ -38,6 +38,8 @@
 #      declare genie spaces, so this is the one CLI step that isn't pure
 #      `bundle deploy`. The resolved space id is cached at
 #      .databricks/state/genie_space_id.
+#   6b. Grant UC / Genie / serving access to the app service principal and to
+#       workspace users (Ask LensIQ runs OBO). See scripts/grant-app-access.sh.
 #   7. Run the deploy jobs in dependency order:
 #        lens-iq-seed                         (synthetic data; opt-in via --seed)
 #        pizza_vision_deploy_yolo             (YOLO endpoint)
@@ -58,6 +60,7 @@
 #   scripts/deploy.sh --skip-sync        # skip step 3 (volume sync)
 #   scripts/deploy.sh --skip-grants      # skip step 4 (Lakebase grants)
 #   scripts/deploy.sh --skip-genie       # skip step 6 (Genie space)
+#   scripts/deploy.sh --skip-app-grants  # skip step 6b (UC/Genie/serving grants)
 #   scripts/deploy.sh --skip-run         # skip step 8 (`bundle run`)
 #   scripts/deploy.sh --bundle-only      # only run step 1 (`bundle deploy`)
 #   scripts/deploy.sh --force-lock       # pass --force-lock to the
@@ -67,7 +70,6 @@
 #
 # Secrets (optional, read from env if set):
 #   ROBOFLOW_API_KEY=...    pushed into lens-iq/roboflow_api_key
-#   TUNNEL_TOKEN=...        pushed into lens-iq/tunnel_token (frp auth token)
 #   SMTP_PASSWORD=...       pushed into lens-iq/smtp_password (send_email tool)
 set -euo pipefail
 
@@ -84,6 +86,7 @@ TARGET="${TARGET:-}"
 SKIP_SYNC=0
 SKIP_GRANTS=0
 SKIP_GENIE=0
+SKIP_APP_GRANTS=0
 SKIP_JOBS=0
 RUN_SEED=0
 SKIP_RUN=0
@@ -95,6 +98,7 @@ while [[ $# -gt 0 ]]; do
     --skip-sync)   SKIP_SYNC=1; shift ;;
     --skip-grants) SKIP_GRANTS=1; shift ;;
     --skip-genie)  SKIP_GENIE=1; shift ;;
+    --skip-app-grants) SKIP_APP_GRANTS=1; shift ;;
     --skip-jobs)   SKIP_JOBS=1; shift ;;
     --seed)        RUN_SEED=1; shift ;;
     --skip-run)    SKIP_RUN=1; shift ;;
@@ -254,8 +258,6 @@ SECRET_SCOPE="$(_bundle_var secret_scope)"
 SECRET_SCOPE="${SECRET_SCOPE:-lens-iq}"
 ROBOFLOW_KEY_NAME="$(_bundle_var roboflow_secret_key)"
 ROBOFLOW_KEY_NAME="${ROBOFLOW_KEY_NAME:-roboflow_api_key}"
-TUNNEL_KEY_NAME="$(_bundle_var apps_tunnel_secret_key)"
-TUNNEL_KEY_NAME="${TUNNEL_KEY_NAME:-tunnel_token}"
 WAREHOUSE_ID="$(_bundle_var warehouse_id)"
 
 # ─── 2. Secrets ──────────────────────────────────────────────────────────
@@ -263,7 +265,7 @@ _log "[2/9] secrets put-secret (scope=${SECRET_SCOPE})"
 _put_secret() {
   local key="$1" value="$2" label="$3"
   if [[ -z "$value" ]]; then
-    _warn "  ${label}: env var empty - skipping put-secret. The downstream consumer (deploy job or public tunnel) will fail loudly if it's required."
+    _warn "  ${label}: env var empty - skipping put-secret. The downstream consumer (deploy job or SMTP) will fail loudly if it's required."
     return
   fi
   printf "%s" "$value" \
@@ -271,20 +273,15 @@ _put_secret() {
   _log "  ${label}: stored in ${SECRET_SCOPE}/${key}"
 }
 _put_secret "$ROBOFLOW_KEY_NAME" "${ROBOFLOW_API_KEY:-}" "ROBOFLOW_API_KEY"
-_put_secret "$TUNNEL_KEY_NAME"   "${TUNNEL_TOKEN:-}"    "TUNNEL_TOKEN"
 # SMTP password backing SMTP_PASSWORD: valueFrom: smtp_password in app.yaml.
 # Value comes from .env; when empty the app still boots with email disabled
 # (server gates email() on the full SMTP_* set - see EMAIL_ENABLED).
 _put_secret "smtp_password"      "${SMTP_PASSWORD:-}"  "SMTP_PASSWORD"
 
 # Grant the app's service principal READ on the secret scope. The `secret`
-# resource binding in resources/app.yml (TUNNEL_TOKEN: valueFrom: tunnel_token)
+# resource binding in resources/app.yml (SMTP_PASSWORD: valueFrom: smtp_password)
 # does NOT create this ACL on its own, and without it the Apps platform
-# injects the secret-backed env var as an EMPTY string - the app boots, but
-# scripts/start.sh sees TUNNEL_TOKEN="" so the frp tunnel comes up unauthed
-# (harmless when the frps server allows it, but the ACL keeps auth working when
-# it is required). Other secret valueFrom bindings would silently resolve empty
-# too.
+# injects the secret-backed env var as an EMPTY string.
 # The SP client id is per-workspace, so we read it off the deployed app rather
 # than hardcode it.
 # put-acl is idempotent, so re-running just refreshes the existing grant.
@@ -299,7 +296,7 @@ if [[ -n "$_APP_SP_ID" ]]; then
   databricks secrets put-acl "$SECRET_SCOPE" "$_APP_SP_ID" READ >/dev/null
   _log "  granted app SP ${_APP_SP_ID} READ on ${SECRET_SCOPE}"
 else
-  _warn "  could not resolve app SP client id - secret-backed env vars (TUNNEL_TOKEN, etc.) may inject empty until the SP has READ on ${SECRET_SCOPE}."
+  _warn "  could not resolve app SP client id - secret-backed env vars (SMTP_PASSWORD, etc.) may inject empty until the SP has READ on ${SECRET_SCOPE}."
 fi
 
 # ─── 3. Volume sync (sample videos + presenter content) ──────────────────
@@ -415,6 +412,14 @@ PY
   fi
 else
   _log "[6/9] Genie space skipped (--skip-genie)"
+fi
+
+# ─── 6b. UC / Genie / serving grants (app SP + workspace users) ─────────
+if [[ "$SKIP_APP_GRANTS" -eq 0 ]]; then
+  _log "[6b/9] grant UC / Genie / serving access (app SP + workspace users)"
+  scripts/grant-app-access.sh
+else
+  _log "[6b/9] app access grants skipped (--skip-app-grants)"
 fi
 
 # ─── 7. Endpoint deploy jobs (YOLO + Roboflow + fog + face) ──────────────
