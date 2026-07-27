@@ -1,404 +1,331 @@
 # LensIQ
 
-LensIQ is a computer-vision dashboard for QSR, gas-station, and
-convenience-store operators. It's a single Databricks AppKit app: every
-frame is a model invocation against a Databricks Model Serving endpoint
-and every row lands in Unity Catalog or Lakebase Postgres. The booth
-demo opens on a Fleet Operations Dashboard, then drills into one model
-demo per use case (spills, plates, guests, faces, camera clarity,
-slip & fall, PPE).
+![LensIQ demo](docs/assets/lensiq-demo.gif)
 
+LensIQ turns camera feeds into governed operational data for quick-service
+restaurants, convenience stores, fuel stations, and other distributed retail
+operations.
+
+## Try the running app
+
+- [Open LensIQ on Databricks](https://lens-iq-7474652124440999.aws.databricksapps.com)
+
+The Databricks Apps URL uses workspace authentication. The app resource is
+currently running on the FEVM AWS workspace.
+
+## Why this demo exists
+
+Retail computer-vision projects often stop at a model demo: a bounding box
+appears on a frame, but the result is disconnected from operations, analytics,
+governance, and business action.
+
+LensIQ demonstrates the complete path from camera signal to operational value:
+
+1. Detect an event with a purpose-built or multimodal model.
+2. Normalize the result into governed records.
+3. Combine detections with store, device, safety, and transaction context.
+4. Surface the result in an operator workflow, fleet dashboard, or alert.
+5. Ask follow-up questions in natural language with governed Genie access.
+
+The business value is not the bounding box itself. It is faster action and
+measurable improvement across:
+
+- Safety: detect spills, missing safety signage, falls, and obscured cameras.
+- Service: monitor guest traffic, drive-through activity, and beverage refill
+  opportunities.
+- Availability: measure pizza inventory, pump availability, and camera health.
+- Loss prevention and security: capture license plates and match known faces.
+- Fleet operations: compare stores using the same governed event model instead
+  of reviewing isolated camera systems.
+- Data access: let operations teams ask LensIQ questions without needing to
+  understand the underlying tables or SQL.
+
+## Demo experience
+
+The Fleet Operations dashboard summarizes eight synthetic stores, then each
+workflow drills into a specific operational question:
+
+- Live Detection starts with the webcam and falls back to Databricks Summit
+  expo-floor footage when a camera is unavailable.
+- Spill Detection measures detection, safety-sign placement, and response time.
+- License Plates combines plate detection, multimodal OCR, and synthetic visit
+  context.
+- Guest Counts compares forecourt traffic with in-store conversion.
+- Facial Recognition uses embeddings and pgvector similarity search.
+- Camera Clarity identifies fogged or contaminated lenses.
+- Pizza Inventory counts slices and whole pies ready for sale.
+- Pump Status identifies active and bagged out-of-service dispensers.
+- Beverage Service classifies glasses as full, half-full, or low.
+- Ask LensIQ opens as a resizable split pane and streams Genie-backed answers,
+  generated SQL, tool progress, charts, and tables.
+
+Additional pages expose detections, alerts, device health, trends, data search,
+the ingestion pipeline, image upload, and presenter materials.
+
+## Architecture
+
+```text
+Camera, webcam, uploaded image, or sample video
+                        |
+                        v
+React 19 + Vite + AppKit UI
+                        |
+                        v
+Databricks AppKit server and @dbx-tools agent runtime
+        |               |                 |                 |
+        v               v                 v                 v
+Model Serving      SQL Warehouse     UC Volumes       Lakebase
+detectors + LLM    fleet analytics   media/assets     app state + pgvector
+        |               |                 |                 |
+        +---------------+-----------------+-----------------+
+                                |
+                                v
+                 Unity Catalog tables + Genie
 ```
-React UI (Vite)  ──►  AppKit plugins (analytics / serving / files / lakebase)
-                              │
-                              ├──►  SQL Warehouse           (analytics queries)
-                              ├──►  Model Serving           (one endpoint per detector)
-                              ├──►  Unity Catalog Volumes   (frames, sample videos, deck)
-                              └──►  Lakebase Autoscaling    (faces pgvector, guest counts,
-                                                             fog observations)
-```
 
-## What's in here
+Custom detectors use dedicated serving aliases, while the multimodal workflows
+share the `llm` alias. Results are normalized by the server before they reach
+the UI or governed storage. Claude vision workflows also share an exact-frame
+cache so related classifiers can reuse a model response.
 
-### Pages (`client/src/pages/`)
+## Technology
 
-| Page                  | What it shows                                                                           |
-| --------------------- | --------------------------------------------------------------------------------------- |
-| Fleet Dashboard       | Landing view. Company-wide KPIs across 8 stores, one section per CV use case.           |
-| Live Detection        | Webcam / sample-video stream into the YOLO detector.                                    |
-| Guest Counts          | Pump → store conversion. Writes guest_counts into Lakebase.                             |
-| License Plates        | YOLO finds the vehicle, Claude vision reads the plate. Joins to a synthetic POS feed.   |
-| Spill Detection       | Claude vision on every frame, with time-to-cone documented per cycle.                   |
-| Facial Recognition    | InsightFace SCRFD + ArcFace embeddings, matched with pgvector in Lakebase.              |
-| Camera Clarity        | Pillow+numpy PyFunc fog detector. Auto-fires cleaning tickets.                          |
-| Image Upload          | One-off upload against any detector endpoint.                                           |
-| Pipeline              | Frame ingestion pipeline visualizer.                                                    |
-| Detections            | Live SSE feed of the `detections` table + 24h aggregates.                               |
-| Inventory             | Pizza stock + truck parking gauges (synthetic).                                         |
-| Trends                | 7-day detection mix + hourly volume.                                                    |
-| Alerts                | Operator alert stream with rule list.                                                   |
-| All Devices           | IoT temperature monitoring grid (synthetic).                                            |
-| Data Search           | Free-text detection-label search.                                                       |
-| Talk Track            | Booth narrative, with LLM rewrite by speaker/audience persona and length.               |
-| Booth Deck            | Standalone HTML deck mounted from the `presenter_content` volume.                       |
+### Application
 
-### Serving endpoints
+- TypeScript with strict compiler settings
+- React 19 and React Router
+- Vite for the local development loop and client build
+- Tailwind CSS and `@databricks/appkit-ui`
+- Recharts for operational visualizations
+- `react-resizable-panels` for the docked Ask LensIQ workspace
+- Express routes provided through the AppKit server plugin
+- Server-sent events for live detections and face-match updates
 
-Each detector has its own endpoint so cold-start, version history, and
-workload size can be tuned independently. Endpoint names live in
-`databricks.yml::variables.*_endpoint` and are surfaced to the app via
-`DATABRICKS_SERVING_ENDPOINT_*` (see `app.yaml`).
+### Databricks
 
-| Endpoint                    | Backing model                                              |
-| --------------------------- | ---------------------------------------------------------- |
-| `databricks-claude-opus-4-7`| Foundation model. Powers chat, talk-track rewrite, spill / wet-floor-sign vision. |
-| `lensiq-detector`           | YOLO general-objects PyFunc (Ultralytics).                 |
-| `lensiq-license-plate`      | Roboflow license-plate model.                              |
-| `lensiq-slip-fall`          | Roboflow slip-and-fall detector.                           |
-| `lensiq-fog-detector`       | Pillow+numpy lens-condition classifier.                    |
-| `lensiq-face-recognition`   | InsightFace buffalo_l + ArcFace 512-d embedder.            |
+- [Databricks Apps](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/)
+  for the hosted application
+- [Databricks Asset Bundles](https://docs.databricks.com/aws/en/dev-tools/bundles/)
+  for resources, jobs, notebooks, and application deployment
+- Databricks AppKit plugins for server, analytics, serving, files, Genie, and
+  Lakebase
+- Databricks Model Serving for all online model calls
+- AI/BI Genie for natural-language analytics over governed tables
+- Unity Catalog tables and volumes for detections and media
+- Lakebase Autoscaling for application state, persistent vision cache, and
+  pgvector face matching
+- Databricks SQL Warehouse for fleet analytics
+- Lakeflow Spark Declarative Pipelines for frame ingestion
+- MLflow and Unity Catalog registered models for custom detector deployment
 
-### AppKit plugins (`server/server.ts`)
+### Models
 
-| Plugin        | Purpose                                                                     |
-| ------------- | --------------------------------------------------------------------------- |
-| `server()`    | Express + Vite dev / static prod.                                           |
-| `analytics()` | Parameterized SQL from `config/queries/*.sql.tmpl` (catalog/schema rendered at boot by `server/uc.ts`), run as the app SP. |
-| `serving()`   | One alias per endpoint above. Calls run on-behalf-of the logged-in user.    |
-| `files()`     | UC volume mounts for `frames`, `frames_inbox`, `sample_videos`, `presenter_content`. |
-| `lakebase()`  | OAuth-refreshed Postgres pool. Schema lives in `lensiq.*` on the bound DB.  |
+- Databricks-hosted Claude for agent reasoning, talk-track transformation,
+  plate OCR, spills, safety signs, inventory, pump status, and beverage vision
+- Ultralytics YOLO for general object detection
+- InsightFace SCRFD and ArcFace for face detection and embeddings
+- Pillow and NumPy for camera lens-condition classification
+- Roboflow Universe weights for license-plate and slip/fall models
 
-### Custom routes
+Roboflow is not called for per-frame inference. `ROBOFLOW_API_KEY` is used only
+while building or cold-starting those two custom serving endpoints so the
+Inference SDK can download model assets and metadata. Inference then runs
+locally inside Databricks Model Serving.
 
-Wired up inline in `onPluginsReady` so the AppKit handle is fully typed.
-Highlights:
+## How `@dbx-tools` is used
 
-| Route                                | Purpose                                                                              |
-| ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `POST /api/detect`                   | Forwards a base64 image to the requested detector alias, normalizes the response.    |
-| `POST /api/talk-track/transform`     | LLM rewrites the talk track by speaker/audience persona + length. Server-side LRU cache. |
-| `GET  /api/detections/stream`        | SSE poller over the `detections` table.                                              |
-| `GET  /api/face-matches/stream`      | SSE poller over the `face_matches` table.                                            |
-| `GET  /api/presenter-content/:id`    | Streams talk track + booth deck from the `presenter_content` volume.                 |
+LensIQ uses [dbx-tools](https://github.com/reggie-db/dbx-tools) to add an
+agentic application layer on top of Databricks AppKit:
 
-### Unity Catalog layout
+- [`@dbx-tools/appkit`](https://github.com/reggie-db/dbx-tools/tree/main/workspaces/node/appkit)
+  provides the `createApp` bootstrap and automatic Lakebase endpoint
+  resolution used by local development and deployment.
+- [`@dbx-tools/appkit-mastra`](https://github.com/reggie-db/dbx-tools/tree/main/workspaces/node/appkit-mastra)
+  defines the `fleet-analyst` Mastra agent, streaming server routes, model
+  selection, memory integration, and Genie toolkit.
+- [`@dbx-tools/ui-mastra`](https://github.com/reggie-db/dbx-tools/tree/main/workspaces/ui/mastra)
+  provides the streaming `MastraChat` interface with tool progress, generated
+  SQL, charts, model picker, and export.
+- [`@dbx-tools/email`](https://github.com/reggie-db/dbx-tools/tree/main/workspaces/node/email)
+  provides the approval-gated `send_email` agent tool.
 
-Catalog and schema are bundle variables (`catalog`, `schema` in
-`databricks.yml`). Defaults are `retail_consumer_goods.lens_iq`. The
-deployed app reads them at runtime from `DATABRICKS_CATALOG` /
-`DATABRICKS_SCHEMA` (set in `app.yaml`); the dev loop reads the same
-two vars from `.env`. See **Swap workspaces** below.
+The Ask LensIQ flow uses on-behalf-of-user authorization for Genie, SQL, and
+serving endpoint discovery. Other application routes use the app service
+principal and the resources bound in `resources/app.yml`.
 
-| Volume                | Read/Write | Purpose                                                          |
-| --------------------- | ---------- | ---------------------------------------------------------------- |
-| `frames`              | RW         | Captured frames written by the Upload / Live pages.              |
-| `frames_inbox`        | R          | Drop-zone for the pipeline simulator.                            |
-| `sample_videos`       | R          | Looped MP4s used by the model demo pages. Synced by `scripts/sync-sample-videos.sh`. |
-| `presenter_content`   | R          | Talk-track markdown + standalone HTML deck. Synced by `scripts/sync-presenter-content.sh` (refreshable without an app redeploy). |
-
-## Setup
+## Developer guide
 
 ### Prerequisites
 
-- Node 22+ with `npm`.
-- Databricks CLI configured with a profile that matches the bundle's
-  workspace host (`databricks.yml::targets.dev.workspace.host`). Auth
-  resolves by host match, so the profile name doesn't matter.
-- A SQL Warehouse (default `databricks.yml::variables.warehouse_id`).
-- A Lakebase Autoscaling project + branch (default
-  `projects/lens-iq/branches/production`, database
-  `databricks.yml::variables.lakebase_database`).
-- A Claude foundation-model serving endpoint (default
-  `databricks-claude-opus-4-7`).
+- Bun
+- Node.js 22 or newer
+- Databricks CLI authenticated to the target workspace
+- `psql` and `jq` for the full Lakebase grant workflow
+- An existing Unity Catalog catalog and SQL Warehouse
 
-### Install + seed
+The current FEVM AWS environment uses:
+
+- Profile: `FEVM-REGGIE-PIERCE-AWS`
+- Catalog: `reggie_pierce_aws_catalog`
+- Schema: `lens_iq`
+- Warehouse: `a2171589c3905bc7`
+- Lakebase endpoint:
+  `projects/lens-iq/branches/production/endpoints/primary`
+- Genie space: `01f186bee4ce16f1ac00f8b0df1c88d6`
+
+### Install and configure
 
 ```bash
-npm install
-
-# Stand up catalog / schema / volumes / synthetic tables.
-databricks bundle validate
-databricks bundle run lens-iq-seed -t dev
-
-# Deploy the per-detector serving endpoints (each is ~3-5 min cold start).
-databricks bundle run pizza_vision_deploy_yolo            -t dev
-databricks bundle run lensiq_deploy_roboflow_detectors    -t dev
-databricks bundle run lensiq_deploy_fog_detector          -t dev
-databricks bundle run lensiq_deploy_face_recognition      -t dev
+bun install
+cp .example.env .env
+databricks current-user me -p FEVM-REGGIE-PIERCE-AWS
 ```
+
+`.example.env` contains the current non-secret FEVM AWS defaults and blank
+placeholders for optional secrets. Never commit `.env`.
+
+For Lakebase, leave `PGHOST` and `PGDATABASE` unset. The `@dbx-tools/appkit`
+bootstrap resolves both from `LAKEBASE_ENDPOINT` in the selected workspace.
+Hardcoding a host from another workspace causes OAuth tokens to be rejected as
+Postgres password-authentication failures.
 
 ### Run locally
 
-```bash
-./dev.sh                       # plain dev loop, assumes setup done
-./dev.sh --seed                # also runs the seed bundle job first
-./dev.sh --deploy-yolo         # also deploys the YOLO endpoint
-./dev.sh --pipeline            # also kicks off pipeline + simulator on the workspace
-# → http://localhost:8000
-```
-
-`dev.sh` reads `.env`. The vars it expects come straight from the
-workspace bindings the deployed app would see:
-
-```
-DATABRICKS_HOST=...
-DATABRICKS_CONFIG_PROFILE=DEFAULT
-DATABRICKS_WAREHOUSE_ID=...
-DATABRICKS_SERVING_ENDPOINT_LLM=databricks-claude-opus-4-7
-DATABRICKS_SERVING_ENDPOINT_DETECTOR=lensiq-detector
-DATABRICKS_SERVING_ENDPOINT_LICENSE_PLATE=lensiq-license-plate
-DATABRICKS_SERVING_ENDPOINT_SLIP_FALL=lensiq-slip-fall
-DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR=lensiq-fog-detector
-DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION=lensiq-face-recognition
-DATABRICKS_CATALOG=retail_consumer_goods
-DATABRICKS_SCHEMA=lens_iq
-DATABRICKS_VOLUME_FRAMES=/Volumes/<catalog>/<schema>/frames
-DATABRICKS_VOLUME_INBOX=/Volumes/<catalog>/<schema>/frames_inbox
-DATABRICKS_VOLUME_SAMPLE_VIDEOS=/Volumes/<catalog>/<schema>/sample_videos
-DATABRICKS_VOLUME_PRESENTER_CONTENT=/Volumes/<catalog>/<schema>/presenter_content
-LAKEBASE_ENDPOINT=projects/lens-iq/branches/production/endpoints/<endpoint>
-```
-
-The public tunnel below is for the deployed app only; it does not
-attach to `npm run dev`.
-
-## Deploying
-
-`scripts/deploy.sh` is the one entry point - fresh workspace or
-nth redeploy, same command. Every step is idempotent so re-runs are a
-fast no-op for anything already in place.
+The direct development loop is:
 
 ```bash
-scripts/deploy.sh              # full deploy against the dev target
-scripts/deploy.sh -t dev       # explicit target
-scripts/deploy.sh --bundle-only  # only run `databricks bundle deploy`
-scripts/deploy.sh --skip-sync    # skip volume byte uploads
-scripts/deploy.sh --skip-grants  # skip Lakebase PUBLIC grants
-scripts/deploy.sh --skip-genie   # skip Genie space create
-scripts/deploy.sh --skip-jobs    # skip per-detector deploy jobs
-scripts/deploy.sh --skip-run     # skip the final `bundle run lens_iq`
+bun run dev
+# http://localhost:8000
 ```
 
-What the script chains, in order (see `scripts/deploy.sh --help` for
-the same list with rationale):
-
-1. **`databricks bundle deploy`** creates everything DABs natively
-   supports - in a brand-new workspace, this single call provisions:
-   - UC catalog `retail_consumer_goods` (`resources/catalog.yml`)
-   - UC schema `lens_iq` (`resources/schema.yml`)
-   - UC volumes `frames`, `frames_inbox`, `sample_videos`,
-     `presenter_content` (`resources/volumes.yml`)
-   - Serverless SQL warehouse `lensiq-warehouse`
-     (`resources/warehouse.yml`)
-   - Secret scope `lens-iq` (`resources/secret_scope.yml`)
-   - Lakebase Autoscaling project `lens-iq` plus auto-provisioned
-     `production` branch + `primary` endpoint + `databricks_postgres`
-     database (`resources/lakebase.yml`)
-   - App resource bindings (`resources/app.yml`) for the warehouse,
-     every serving endpoint, the Lakebase database, the four volumes,
-     and the optional tunnel-token secret
-   - Lakeflow Spark Declarative Pipeline (`resources/pipeline.yml`)
-   - Jobs for seed data + per-detector deploys + pipeline simulator
-     (defined inline in `databricks.yml::resources.jobs`)
-2. **`databricks secrets put-secret`** for `roboflow_api_key` and
-   `tunnel_token`. Values are read from `ROBOFLOW_API_KEY` and
-   `TUNNEL_TOKEN` env vars; empty values skip with a warning. The
-   `tunnel_token` is only needed when the portr tunnel is enabled, but a
-   missing `roboflow_api_key` lets the downstream deploy job fail loudly
-   rather than silently shipping a half-configured endpoint.
-3. **`scripts/sync-sample-videos.sh`** + **`sync-presenter-content.sh`**
-   push the bytes that DABs deliberately leaves out of the bundle
-   upload (MP4s > 10MB per file, talk-track markdown that re-reads at
-   runtime).
-4. **`scripts/grant-lakebase-schema.sh`** opens the app schema to
-   PUBLIC so the app SP retains write access regardless of who created
-   the schema first. See the script header for the full ownership
-   rationale.
-5. **`databricks genie create-space`** from
-   `resources/genie_space_lensiq_detections.json` (DABs does not yet
-   support a `genie_spaces` resource). The resolved space id is cached
-   at `.databricks/state/genie_space_id` so subsequent runs no-op.
-6. **`databricks bundle run`** for the deploy jobs - in dependency
-   order, `lens-iq-seed`, `pizza_vision_deploy_yolo`,
-   `lensiq_deploy_roboflow_detectors` (only if `ROBOFLOW_API_KEY` is
-   set), `lensiq_deploy_fog_detector`, `lensiq_deploy_face_recognition`.
-7. **`databricks bundle run lens_iq`** pushes the source code into the
-   app container and starts it.
-
-Per repo policy, no command pushes to the workspace unless you run it.
-
-### Fresh environment (first deploy)
-
-Single command, assuming you have the Databricks CLI authenticated to
-the target workspace and `node`, `npm`, `psql`, and `jq` on your PATH:
+The preflight wrapper can validate workspace resources and optionally run
+bundle jobs before starting the same Bun development command:
 
 ```bash
-git clone <repo> && cd dais-demos
-npm install
-
-# Tell the CLI which workspace to target. Either set DATABRICKS_CONFIG_PROFILE
-# in .env (scripts/deploy.sh sources it) or use `databricks auth login` /
-# the -p flag at deploy time.
-cat > .env <<'ENV'
-DATABRICKS_CONFIG_PROFILE=<your-profile>
-DATABRICKS_CATALOG=retail_consumer_goods
-DATABRICKS_SCHEMA=lens_iq
-ENV
-
-# Optional: secret values. Missing values skip with a warning; you can
-# always re-run scripts/deploy.sh later with them set.
-export ROBOFLOW_API_KEY=<roboflow-key>   # for license-plate + slip/fall
-export TUNNEL_TOKEN=<portr-cli-token>    # required only if the portr tunnel is enabled
-
-scripts/deploy.sh -t dev
+./dev.sh
+./dev.sh --seed
+./dev.sh --deploy-yolo
+./dev.sh --pipeline
 ```
 
-That's the whole thing. The first run takes ~10-15 minutes - most of
-it is the per-detector deploy jobs warming up cold-start endpoints in
-parallel. Subsequent runs are 30-60 seconds.
+Local development keeps Mastra persistence in memory because deployed
+Postgres tables can be owned by the app service principal. Genie remains
+available locally and uses the configured Databricks profile.
 
-If your workspace already has a SQL warehouse / Lakebase project /
-Claude endpoint you'd rather reuse, override per-command:
+### Validate changes
 
 ```bash
-databricks bundle deploy -t dev \
-  --var "warehouse_id=<id>,lakebase_database=<db_name>,llm_endpoint=<endpoint>"
+bun run typecheck
+bun run build
+databricks bundle validate -t dev -p FEVM-REGGIE-PIERCE-AWS
 ```
 
-then run `scripts/deploy.sh --bundle-only` for nothing else, or the
-full script to continue the chain.
+The local package manager is Bun. `package.json` scripts remain npm-compatible
+because Databricks Apps runs `npm run build` inside the deployment container.
+Lockfiles are excluded from the bundle so local registry URLs are never shipped
+to Databricks Apps.
 
-## Swap workspaces
-
-The Unity Catalog catalog + schema are split into three layers, and a
-helper script keeps them in sync:
-
-- **DABs resources** (volumes, app binding, jobs) - resolved from
-  `databricks.yml::variables.{catalog,schema}` via `${var.catalog}` /
-  `${var.schema}` interpolation. Change the defaults (or pass `--var`
-  at deploy time) and every YAML resource follows.
-- **Runtime app code** (server constants in `server/uc.ts`, direct
-  `analytics.query()` calls, and the file-based analytics queries) - reads
-  `DATABRICKS_CATALOG` / `DATABRICKS_SCHEMA` from env. The queries live as
-  `config/queries/*.sql.tmpl` with `${catalog}` / `${schema}` placeholders;
-  `server/uc.ts::renderQueryFiles()` renders them to git-ignored `*.sql` at
-  boot. Set the two env vars in `app.yaml` for deploys, `.env` for local dev.
-- **Static file artifacts that DABs can't see** - `notebooks/*.ipynb`
-  widget defaults, `resources/genie_space_*.json`,
-  `pipelines/pizza_vision_pipeline.py` Spark conf defaults. These have
-  fully-qualified table refs baked in and need a sed pass.
-
-`scripts/swap-uc.sh` does all three at once:
+### Data and model setup
 
 ```bash
-scripts/swap-uc.sh --catalog new_catalog --schema new_schema
+databricks bundle run lens-iq-seed -t dev -p FEVM-REGGIE-PIERCE-AWS
+databricks bundle run pizza_vision_deploy_yolo -t dev -p FEVM-REGGIE-PIERCE-AWS
+databricks bundle run lensiq_deploy_roboflow_detectors -t dev -p FEVM-REGGIE-PIERCE-AWS
+databricks bundle run lensiq_deploy_fog_detector -t dev -p FEVM-REGGIE-PIERCE-AWS
+databricks bundle run lensiq_deploy_face_recognition -t dev -p FEVM-REGGIE-PIERCE-AWS
 ```
 
-It reads the current defaults out of `databricks.yml`, rewrites the YAML
-defaults + the static file artifacts above (the analytics queries are
-runtime-parameterized, so they're left alone), and prints the redeploy
-command. After
-running it you still need to do the workspace-side bootstrap (`databricks
-bundle deploy` + the per-detector deploy jobs) before the app can find
-its tables in the new home.
+The Roboflow deployment job requires `ROBOFLOW_API_KEY`. It stores the key in a
+Databricks secret and uses it only to acquire model assets. The main app does
+not read this key.
 
-The script intentionally does NOT rename bundle resource IDs
-(`lens-iq-seed`, `lensiq_deploy_*`) or serving endpoint names
-(`lensiq-*`); those are independent identifiers.
+### Deploy
 
-## Public tunnel (opt-in)
+`scripts/deploy.sh` is the supported deployment entry point:
 
-The Databricks Apps default URL goes through the workspace SSO redirect,
-which makes screen-recording a demo and sharing a link with a customer
-painful. To bypass that, the app can register a
-[portr](https://github.com/amalshaji/portr) client from inside the
-container against the portr server and serve the same bytes at a stable
-public HTTPS URL (e.g. `https://lensiq.apps.dbx.tools`).
-
-**Opt-in on the app side is via env vars in `app.yaml`:**
-
-```yaml
-- name: TUNNEL_SUBDOMAIN
-  value: lensiq                  # -> https://lensiq.<TUNNEL_SERVER>
-- name: TUNNEL_SERVER
-  value: apps.dbx.tools          # portr server_url
-- name: TUNNEL_TOKEN
-  valueFrom: tunnel_token        # required; resource binding in resources/app.yml
+```bash
+scripts/deploy.sh -t dev --seed
 ```
 
-`scripts/start.sh` reads `TUNNEL_SUBDOMAIN` at boot and:
+It:
 
-- Downloads the portr client from the pinned GitHub release
-  (`PORTR_VERSION`, default `1.0.13`) into the per-container
-  `$HOME/.portr/bin` (idempotent across cold starts - skips when the
-  on-disk binary already matches). The release zip is extracted with
-  `unzip`, falling back to `python3 -m zipfile` on slim runtimes.
-- Renders `~/.portr/config.yaml` with `server_url` = `TUNNEL_SERVER`,
-  `ssh_url` = `TUNNEL_SSH` (default `${TUNNEL_SERVER}:4444`), `secret_key`
-  = `TUNNEL_TOKEN`, the dashboard + TUI disabled (no interactive terminal
-  in the Apps runtime), and a `tunnels:` entry pinning the subdomain to
-  `DATABRICKS_APP_PORT`.
-- Backgrounds `portr start <TUNNEL_SUBDOMAIN>` alongside the node
-  entrypoint and supervises both with the same SIGTERM + SIGKILL grace
-  path. (The flag form `portr http <port> -s <sub>` is **not** used - it
-  ignores the requested subdomain and the server hands back a random one;
-  only the config `tunnels:` block + `portr start` pins the subdomain.)
+1. Validates the existing catalog and warehouse.
+2. Deploys the schema, volumes, secret scope, Lakebase project, jobs, pipeline,
+   and app resource bindings.
+3. Stores configured secret values.
+4. Syncs sample videos and presenter content to Unity Catalog volumes.
+5. Applies Lakebase schema grants.
+6. Runs the synthetic seed job when `--seed` is set.
+7. Creates or updates the Genie space.
+8. Runs model deployment jobs for endpoints that are not already ready.
+9. Deploys and starts the Databricks App.
 
-**`TUNNEL_TOKEN` is required.** It is the portr cli auth token (config
-`secret_key`); without it portr's handshake fails and no tunnel comes up.
-The subdomain must be reserved for the account that owns the token on the
-portr server.
+Useful controls:
 
-**To opt out**, remove (or comment out) the `TUNNEL_SUBDOMAIN` env var
-in `app.yaml`. With it unset, `scripts/start.sh` skips the portr install
-completely and just runs node. The app stays reachable at its standard
-Databricks Apps workspace URL.
-
-The auth token is held in the Databricks secret store - scope and key are
-bundle variables (`secret_scope` / `apps_tunnel_secret_key` in
-`databricks.yml`, default key `tunnel_token`). `scripts/deploy.sh` pushes
-the value from the `TUNNEL_TOKEN` env var (read from `.env`).
-
-## Project layout
-
-```
-.
-├── server/                       AppKit server
-│   ├── server.ts                 Plugins + custom routes (defined inline)
-│   ├── talk-track-rewrite.ts     LLM persona rewrite + LRU cache
-│   ├── vision-detector.ts        Claude vision wrapper (spills / wet floor)
-│   ├── llm-response.ts           Shared chat-completion plumbing
-│   └── ...
-├── client/                       Vite + React SPA
-│   ├── src/
-│   │   ├── App.tsx               Routing, nav, role gating
-│   │   ├── pages/                One file per view (see table above)
-│   │   ├── components/           Charts, AI chat, global loading bar
-│   │   └── lib/                  query keys, model registry, tour
-│   └── public/sample-videos/     MP4s pushed to the sample_videos volume
-├── config/queries/               One .sql.tmpl per analytics query key (rendered to .sql at boot)
-├── docs/                         Talk track + booth deck (synced to volume)
-├── notebooks/                    Seed + per-detector deploy notebooks
-├── scripts/                      Deploy, start, volume-sync, grant helpers
-├── resources/                    DABs resource files (app, pipeline, volumes)
-├── databricks.yml                DAB entrypoint (vars, targets, jobs)
-├── app.yaml                      Databricks Apps manifest
-└── package.json
+```bash
+scripts/deploy.sh --bundle-only
+scripts/deploy.sh --skip-sync
+scripts/deploy.sh --skip-grants
+scripts/deploy.sh --skip-genie
+scripts/deploy.sh --skip-jobs
+scripts/deploy.sh --skip-run
 ```
 
-## Repo conventions
+The script is idempotent. The Unity Catalog catalog and SQL Warehouse are
+workspace-level prerequisites and are not created by this bundle.
 
-A few project-specific rules worth knowing before you edit:
+Detailed deployment and troubleshooting steps live in
+[`DEPLOY_INSTRUCTIONS.md`](DEPLOY_INSTRUCTIONS.md).
 
-- All Postgres goes through `appkit.lakebase.query(...)`. Do not import
-  `pg`, `postgres`, `kysely`, or `drizzle-orm` directly.
-- Routes use `asyncRoute(...)` + `zod` schemas + `HttpError`. Don't roll
-  per-route try/catch envelopes.
-- Bootstrap DDL goes through `onceAsync(...)` + `_runIdempotentDdl(...)`
-  so it tolerates ownership skips on cold start.
-- UI primitives come from `@databricks/appkit-ui/react`. Toast is
-  `sonner` (`Toaster` is mounted in `client/src/main.tsx`).
-- New notebooks are `.ipynb`, not the `# Databricks notebook source`
-  format.
+### Move to another workspace
 
-See `.cursor/rules/dry-this-repo.mdc` for the full DRY playbook.
+Use the repository helper to keep runtime config, bundle defaults, notebooks,
+pipeline defaults, and Genie table references aligned:
+
+```bash
+scripts/swap-uc.sh \
+  --catalog <catalog> \
+  --schema <schema> \
+  --genie-space-id <space-id>
+```
+
+The helper rewrites the catalog, schema, volume paths, and optional Genie ID.
+Update the remaining workspace-specific profile, warehouse, and secrets in
+`.env`, validate the bundle, and run the deployment script.
+
+### Public tunnel
+
+The deployed app can optionally start an frp client through
+`scripts/start.sh`. The current host is configured in `app.yaml`, not `.env`.
+`TUNNEL_TOKEN` is optional and is stored through the app's secret binding.
+See `DEPLOY_INSTRUCTIONS.md` for the server-side frp setup.
+
+Current configured public tunnel:
+[https://lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io](https://lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io)
+
+## Repository layout
+
+```text
+client/                 React application, pages, components, and hooks
+server/                 AppKit server, routes, serving, cache, and agent wiring
+config/queries/         Parameterized SQL templates rendered at server boot
+notebooks/              Data seed and custom model deployment notebooks
+pipelines/              Lakeflow Spark Declarative Pipeline source
+resources/              Bundle resources for app, schema, volumes, and Lakebase
+scripts/                Deploy, sync, grant, startup, and workspace-swap tools
+docs/                   Presenter talk tracks and supporting demo material
+databricks.yml          Asset Bundle entry point
+app.yaml                Databricks Apps runtime configuration
+.example.env            Local and deploy-time environment template
+```
+
+## Engineering conventions
+
+- Use `appkit.lakebase.query(...)` for every Postgres operation.
+- Define routes with `asyncRoute`, Zod schemas, and `HttpError`.
+- Run bootstrap DDL through `onceAsync` and `_runIdempotentDdl`.
+- Use `buildBatchInsert` for multi-row inserts.
+- Use AppKit UI primitives and Sonner notifications.
+- Reuse the existing detection, webcam, and sample-video hooks.
+- Create and edit notebooks as `.ipynb`.
+- Use Bun for local dependency and script commands.

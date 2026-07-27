@@ -11,39 +11,41 @@ env:
   # block), so these are literals you swap per workspace with
   # scripts/swap-uc.sh. KEEP IN SYNC with databricks.yml::variables and .env.
   - name: DATABRICKS_CATALOG
-    value: reggie_pierce_7405614800873570
+    value: reggie_pierce_aws_catalog
   - name: DATABRICKS_SCHEMA
     value: lens_iq
   # ─── Genie space ─────────────────────────────────────────────────────
-  # Backs the "Ask LensIQ" chat via the AppKit genie() plugin. The plugin
-  # reads this env var and registers the space under the `default` alias
-  # (see server/server.ts and client/src/components/AIChatButton.tsx). The
-  # app SP gets CAN_RUN on the space via the `genie_space` resource binding
-  # in resources/app.yml. Literal for the same reason as catalog/schema
-  # above (no ${var} interpolation in standalone app.yaml); swap per
-  # workspace. KEEP IN SYNC with databricks.yml::variables.genie_space_id.
+  # Backs the "Ask LensIQ" Mastra chat (genie() plugin + Genie toolkit +
+  # <MastraChat>). The plugin reads this env var and registers the space
+  # under the `default` alias (see server/server.ts and
+  # client/src/components/AIChatButton.tsx). The app SP gets CAN_RUN via the
+  # `genie_space` resource binding in resources/app.yml. Literal for the
+  # same reason as catalog/schema above (no ${var} interpolation in
+  # standalone app.yaml); swap per workspace. KEEP IN SYNC with
+  # databricks.yml::variables.genie_space_id.
   - name: DATABRICKS_GENIE_SPACE_ID
-    value: 01f1648d45ec15bebd112142c2c897db
+    value: 01f186bee4ce16f1ac00f8b0df1c88d6
   # ─── Public tunnel (opt-in) ──────────────────────────────────────────
-  # scripts/start.sh downloads the portr client (https://github.com/amalshaji/portr)
-  # and opens a tunnel only when TUNNEL_SUBDOMAIN is set. portr dials the
-  # portr server (TUNNEL_SERVER) over SSH and serves public visitor traffic at
-  # https://<TUNNEL_SUBDOMAIN>.<TUNNEL_SERVER>, forwarding it to the local app
-  # on DATABRICKS_APP_PORT.
+  # scripts/start.sh downloads frpc and registers a tunnel only when
+  # AZURE_CONTAINER_APPS is set. It is the native Azure Container Apps FQDN
+  # that fronts the self-hosted frps server; the platform terminates TLS on
+  # :443 with its managed cert and forwards to frps. The same FQDN doubles as
+  # the frpc serverAddr and the vhost customDomain, so one URL both carries
+  # the client connection and serves public traffic (frps port-reuse). The
+  # leftmost label becomes the frpc proxy name.
   #
-  # TUNNEL_TOKEN is REQUIRED here: it is the portr cli auth token (config
-  # secret_key). Without it the portr handshake fails and no tunnel comes up.
-  # It is backed by the `tunnel_token` resource binding in resources/app.yml.
+  # TUNNEL_TOKEN is OPTIONAL - when present it is sent as the frp auth token
+  # (the frps server must match it); when empty the tunnel still comes up
+  # with no auth. The `tunnel_token` resource binding in resources/app.yml
+  # backs the valueFrom; drop both if you don't need auth.
   #
   # To opt OUT of the public tunnel: remove (or comment out) the
-  # TUNNEL_SUBDOMAIN env var below. With it unset, start.sh skips the portr
+  # AZURE_CONTAINER_APPS env var below. With it unset, start.sh skips the frp
   # install entirely and just runs node.
-  - name: TUNNEL_SUBDOMAIN
-    value: lensiq
-  - name: TUNNEL_SERVER
-    value: apps.dbx.tools
+  - name: AZURE_CONTAINER_APPS
+    value: lensiq.thankfulsea-34d0c5b1.eastus2.azurecontainerapps.io
   - name: TUNNEL_TOKEN
-    valueFrom: apps_dbx_tools_token
+    valueFrom: tunnel_token
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares
@@ -104,3 +106,24 @@ env:
   # which then fails DNS lookup inside pg.Pool.
   - name: LAKEBASE_ENDPOINT
     valueFrom: postgres
+  # ─── Email (SMTP) ────────────────────────────────────────────────────
+  # Backs the agent's approval-gated send_email tool (@dbx-tools/email). The
+  # server gates the email() plugin + tool on the full SMTP_* set (see
+  # EMAIL_ENABLED in server/server.ts), so a missing/empty value just disables
+  # email and the app still boots. Non-secret settings are literals; the
+  # password is a secret bound via the `smtp_password` resource in
+  # resources/app.yml. KEEP IN SYNC with .env.
+  - name: SMTP_HOST
+    value: mail.smtp2go.com
+  - name: SMTP_PORT
+    value: "2525"
+  - name: SMTP_SECURE
+    value: "false"
+  - name: SMTP_USER
+    value: reggie.pierce@dbx.tools
+  - name: SMTP_PASSWORD
+    valueFrom: smtp_password
+  - name: EMAIL_DOMAIN
+    value: dbx.tools
+  - name: EMAIL_FROM
+    value: reggie.pierce@dbx.tools

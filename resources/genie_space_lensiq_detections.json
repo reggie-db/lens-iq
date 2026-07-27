@@ -103,7 +103,7 @@
   "data_sources": {
     "tables": [
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.alerts",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.alerts",
         "description": [
           "Rule-engine alerts emitted by the LensIQ Jolt subsystem. Severity is critical (P1, refrigeration / safety), warning (P2), or info. acknowledged=true means an operator has triaged it."
         ],
@@ -159,7 +159,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.camera_status",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.camera_status",
         "description": [
           "Per-hour online/offline samples for every camera in the fleet. Each store has 3 cameras; ~576 rows per day total. Use for uptime questions."
         ],
@@ -191,7 +191,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.detections",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.detections",
         "description": [
           "Per-frame YOLO detections from every camera in the fleet. One row per detected object. Use label='vehicle' for traffic, label='person' for guests, label='truck' for delivery / forecourt trucks, label='pizza' for hot-hold, label='package' for curbside pickup. Confidence is 0-1."
         ],
@@ -247,7 +247,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.device_readings",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.device_readings",
         "description": [
           "Hourly time series of temperature + humidity readings per device for the last 7 days."
         ],
@@ -285,7 +285,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.devices",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.devices",
         "description": [
           "Refrigeration / IoT devices, one per store. Current temperature and status snapshot."
         ],
@@ -329,7 +329,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.face_matches",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.face_matches",
         "description": [
           "Live write-back from the LensIQ Facial Recognition page. One row per matched face above the cosine-similarity threshold (0.45). role is banned | vip | staff. Use for security / VIP recognition / staff-time-on-floor questions."
         ],
@@ -385,7 +385,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.fog_observations",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.fog_observations",
         "description": [
           "Live write-back from the LensIQ Camera Health page. Per-tick observation of how fogged / obscured each camera lens is. area_pct is 0-100 (% of frame fogged); >= 25 is treated as fogged. Use for cleaning / preventive-maintenance questions."
         ],
@@ -441,7 +441,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.guest_counts",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.guest_counts",
         "description": [
           "Live write-back from the LensIQ Guests page. Each row is one person-count sample for a defined zone (entrance, forecourt, drive_thru, register, aisle). Rows land within ~2 seconds of the booth click. Use for guest-traffic and pump-to-store conversion questions."
         ],
@@ -485,7 +485,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.inventory",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.inventory",
         "description": [
           "Pizza hot-hold stock and truck-parking fill samples taken every 30 minutes for the first 4 stores. item='pizza' is percent of capacity stocked (lower is a problem); item='truck_parking' is percent of lot occupied."
         ],
@@ -517,7 +517,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.license_plates",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.license_plates",
         "description": [
           "Drive-thru / forecourt license plate captures from the lensiq-license-plate Roboflow endpoint. Plate text is partially masked (last chars redacted) - good for state/dwell analytics, not for individual lookups."
         ],
@@ -561,7 +561,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.pipeline_frames",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.pipeline_frames",
         "description": [
           "Gold layer of the Lakeflow Spark Declarative Pipeline. One row per deduped frame produced by the inbox volume + YOLO endpoint, with the parsed detections array. Use this for end-to-end CV throughput questions (frames/sec, detections/frame)."
         ],
@@ -629,7 +629,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.plate_reads",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.plate_reads",
         "description": [
           "Live write-back from the LensIQ License Plates page. One row per successful OCR with the full extracted plate text (not masked). Pair with license_plates for the masked / privacy-safe view."
         ],
@@ -685,7 +685,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.spill_cycles",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.spill_cycles",
         "description": [
           "Live write-back from the LensIQ Spills page. One row per completed spill -> cone response cycle. response_ms is the wall-clock time between the first spill detection and the first cone-placement detection. Lower is better; target is < 60000 (1 minute)."
         ],
@@ -741,7 +741,7 @@
         ]
       },
       {
-        "identifier": "reggie_pierce_7405614800873570.lens_iq.stores",
+        "identifier": "reggie_pierce_aws_catalog.lens_iq.stores",
         "description": [
           "The 8 fixed LensIQ store locations. Join target for every other table - always surface stores.name instead of raw store_id in answers."
         ],
@@ -787,7 +787,7 @@
         "content": [
           "You are the LensIQ Operations analyst for an 8-store fleet of QSR / convenience-store / gas-station locations. ",
           "Every table in this space is produced by computer-vision pipelines (per-frame YOLO + Claude vision detectors) ",
-          "or by the LensIQ app's live write-backs. Tables live in `reggie_pierce_dais_catalog.lens_iq`. ",
+          "or by the LensIQ app's live write-backs. Tables live in `reggie_pierce_aws_catalog.lens_iq`. ",
           "Domain primer: ",
           "(1) The fleet is fixed at 8 stores. `stores.id` follows the pattern S-<city3>-<NNN> (e.g. S-ATL-001). ",
           "Always join on `store_id` and surface `stores.name` to the user instead of raw ids. ",
@@ -823,13 +823,13 @@
         "sql": [
           "WITH today AS (\n",
           "  SELECT d.store_id, COUNT(*) AS detections\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.detections d\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.detections d\n",
           "  WHERE d.label = 'vehicle' AND d.ts >= NOW() - INTERVAL 24 HOURS\n",
           "  GROUP BY d.store_id\n",
           "),\n",
           "yesterday AS (\n",
           "  SELECT d.store_id, COUNT(*) AS detections\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.detections d\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.detections d\n",
           "  WHERE d.label = 'vehicle'\n",
           "    AND d.ts >= NOW() - INTERVAL 48 HOURS\n",
           "    AND d.ts <  NOW() - INTERVAL 24 HOURS\n",
@@ -840,7 +840,7 @@
           "  COALESCE(t.detections, 0) AS detections_today,\n",
           "  COALESCE(y.detections, 0) AS detections_yesterday,\n",
           "  COALESCE(t.detections, 0) - COALESCE(y.detections, 0) AS delta\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.stores s\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.stores s\n",
           "LEFT JOIN today t     ON t.store_id = s.id\n",
           "LEFT JOIN yesterday y ON y.store_id = s.id\n",
           "ORDER BY detections_today DESC"
@@ -855,7 +855,7 @@
           "SELECT\n",
           "  HOUR(d.ts) AS hour_of_day,\n",
           "  COUNT(*)   AS vehicle_detections\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.detections d\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.detections d\n",
           "WHERE d.label = 'vehicle'\n",
           "  AND d.ts >= NOW() - INTERVAL 7 DAYS\n",
           "GROUP BY HOUR(d.ts)\n",
@@ -873,7 +873,7 @@
           "    d.store_id,\n",
           "    COUNT_IF(d.label = 'vehicle') AS vehicles,\n",
           "    COUNT_IF(d.label = 'person')  AS persons\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.detections d\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.detections d\n",
           "  WHERE d.ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY d.store_id\n",
           ")\n",
@@ -883,7 +883,7 @@
           "  m.persons,\n",
           "  ROUND(m.persons / NULLIF(m.vehicles, 0) * 100, 1) AS pump_to_store_pct\n",
           "FROM metrics m\n",
-          "JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = m.store_id\n",
+          "JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = m.store_id\n",
           "ORDER BY pump_to_store_pct DESC"
         ]
       },
@@ -898,8 +898,8 @@
           "  COUNT(*) AS spill_cycles,\n",
           "  ROUND(AVG(c.response_ms) / 1000.0, 1) AS avg_response_seconds,\n",
           "  ROUND(MAX(c.response_ms) / 1000.0, 1) AS slowest_seconds\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.spill_cycles c\n",
-          "LEFT JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = c.store_id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.spill_cycles c\n",
+          "LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = c.store_id\n",
           "WHERE c.ts >= NOW() - INTERVAL 24 HOURS\n",
           "GROUP BY s.name\n",
           "ORDER BY avg_response_seconds DESC"
@@ -913,13 +913,13 @@
         "sql": [
           "WITH this_week AS (\n",
           "  SELECT state, COUNT(*) AS plates\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.license_plates\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.license_plates\n",
           "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY state\n",
           "),\n",
           "last_week AS (\n",
           "  SELECT state, COUNT(*) AS plates\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.license_plates\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.license_plates\n",
           "  WHERE ts >= NOW() - INTERVAL 14 DAYS AND ts < NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY state\n",
           ")\n",
@@ -944,7 +944,7 @@
           "  COUNT(DISTINCT store_id) AS stores_visited,\n",
           "  COUNT(*)                 AS total_captures,\n",
           "  COLLECT_SET(store_id)    AS store_ids\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.license_plates\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.license_plates\n",
           "WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "GROUP BY plate_masked\n",
           "HAVING stores_visited > 1\n",
@@ -959,7 +959,7 @@
         "sql": [
           "WITH worst AS (\n",
           "  SELECT store_id, COUNT(*) AS critical_count\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.alerts\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.alerts\n",
           "  WHERE severity = 'critical' AND ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY store_id\n",
           "  ORDER BY critical_count DESC\n",
@@ -969,8 +969,8 @@
           "  s.name AS store,\n",
           "  a.rule_id,\n",
           "  COUNT(*) AS fires\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.alerts a\n",
-          "JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = a.store_id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.alerts a\n",
+          "JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = a.store_id\n",
           "JOIN worst w ON w.store_id = a.store_id\n",
           "WHERE a.severity = 'critical' AND a.ts >= NOW() - INTERVAL 7 DAYS\n",
           "GROUP BY s.name, a.rule_id\n",
@@ -988,8 +988,8 @@
           "  s.name                                AS store,\n",
           "  ROUND(AVG(CASE WHEN c.online THEN 100.0 ELSE 0.0 END), 1) AS uptime_pct,\n",
           "  COUNT(*)                              AS samples\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.camera_status c\n",
-          "JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = c.store_id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.camera_status c\n",
+          "JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = c.store_id\n",
           "WHERE c.ts >= NOW() - INTERVAL 24 HOURS\n",
           "GROUP BY s.name\n",
           "ORDER BY uptime_pct ASC"
@@ -1008,8 +1008,8 @@
           "  COUNT_IF(f.fogged)              AS fogged_ticks,\n",
           "  COUNT(*)                        AS total_ticks,\n",
           "  ROUND(100.0 * COUNT_IF(f.fogged) / COUNT(*), 1) AS pct_of_time_fogged\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.fog_observations f\n",
-          "LEFT JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = f.store_id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.fog_observations f\n",
+          "LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = f.store_id\n",
           "WHERE f.ts >= NOW() - INTERVAL 24 HOURS\n",
           "GROUP BY s.name, f.camera_label\n",
           "ORDER BY pct_of_time_fogged DESC"
@@ -1027,8 +1027,8 @@
           "  fm.name AS person,\n",
           "  fm.role,\n",
           "  ROUND(fm.similarity, 3) AS similarity\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.face_matches fm\n",
-          "LEFT JOIN reggie_pierce_7405614800873570.lens_iq.stores s ON s.id = fm.store_id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.face_matches fm\n",
+          "LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = fm.store_id\n",
           "WHERE fm.role = 'banned' AND fm.ts >= NOW() - INTERVAL 7 DAYS\n",
           "ORDER BY fm.ts DESC"
         ]
@@ -1046,8 +1046,8 @@
           "  ROUND(AVG(r.temperature), 1) AS avg_temp_f,\n",
           "  ROUND(MAX(r.temperature), 1) AS peak_temp_f,\n",
           "  COUNT_IF(r.temperature > 80) AS hot_hours\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.devices d\n",
-          "JOIN reggie_pierce_7405614800873570.lens_iq.device_readings r ON r.device_id = d.id\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.devices d\n",
+          "JOIN reggie_pierce_aws_catalog.lens_iq.device_readings r ON r.device_id = d.id\n",
           "WHERE r.ts >= NOW() - INTERVAL 24 HOURS\n",
           "GROUP BY d.id, d.name, d.location\n",
           "HAVING hot_hours >= 2\n",
@@ -1064,25 +1064,25 @@
           "  SELECT store_id,\n",
           "         COUNT_IF(label = 'vehicle') AS vehicles,\n",
           "         COUNT_IF(label = 'person')  AS persons\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.detections\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.detections\n",
           "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY store_id\n",
           "),\n",
           "plates AS (\n",
           "  SELECT store_id, COUNT(*) AS plates\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.license_plates\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.license_plates\n",
           "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY store_id\n",
           "),\n",
           "alerts_w AS (\n",
           "  SELECT store_id, COUNT(*) AS alerts\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.alerts\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.alerts\n",
           "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY store_id\n",
           "),\n",
           "uptime AS (\n",
           "  SELECT store_id, ROUND(AVG(CASE WHEN online THEN 100.0 ELSE 0.0 END), 1) AS camera_uptime_pct\n",
-          "  FROM reggie_pierce_7405614800873570.lens_iq.camera_status\n",
+          "  FROM reggie_pierce_aws_catalog.lens_iq.camera_status\n",
           "  WHERE ts >= NOW() - INTERVAL 7 DAYS\n",
           "  GROUP BY store_id\n",
           ")\n",
@@ -1093,7 +1093,7 @@
           "  COALESCE(plates.plates, 0)   AS plates_captured,\n",
           "  COALESCE(alerts_w.alerts, 0) AS alerts,\n",
           "  COALESCE(uptime.camera_uptime_pct, 0) AS camera_uptime_pct\n",
-          "FROM reggie_pierce_7405614800873570.lens_iq.stores s\n",
+          "FROM reggie_pierce_aws_catalog.lens_iq.stores s\n",
           "LEFT JOIN dets      ON dets.store_id     = s.id\n",
           "LEFT JOIN plates    ON plates.store_id   = s.id\n",
           "LEFT JOIN alerts_w  ON alerts_w.store_id = s.id\n",

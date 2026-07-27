@@ -2,8 +2,10 @@ import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
 import { Readable } from "node:stream";
-import { analytics, createApp, files, genie, lakebase, serving, server, sql } from "@databricks/appkit";
-import { createAgent, GENIE_INSTRUCTIONS, mastra } from "@dbx-tools/appkit-mastra";
+import { analytics, files, genie, lakebase, serving, server, sql } from "@databricks/appkit";
+import { createApp as createAppModule } from "@dbx-tools/appkit";
+import { agents, genie as mastraGenie, plugin as mastraPlugin } from "@dbx-tools/appkit-mastra";
+import { plugin as emailPlugin, tool as emailToolModule } from "@dbx-tools/email";
 import { z } from "zod";
 import { MODELS, getModel, DEFAULT_MODEL_ID } from "../client/src/lib/models.ts";
 import { SAMPLE_VIDEOS, getSampleVideo } from "../client/src/lib/samples.ts";
@@ -23,6 +25,50 @@ import {
   onceAsync,
 } from "./util.ts";
 import { renderQueryFiles, UC_TABLE } from "./uc.ts";
+
+// @dbx-tools/appkit re-exports each module as a namespace. createApp is the
+// auto-configuring wrapper: it runs autopg (resolves LAKEBASE_ENDPOINT / PGHOST
+// / PGDATABASE via the Databricks Postgres REST API into process.env) BEFORE
+// delegating to AppKit's own createApp, so the lakebase() plugin sees a fully
+// populated env. Same call signature as AppKit's createApp. `email` is the SMTP
+// plugin and `emailTool` builds the approval-gated send_email tool.
+const { createApp } = createAppModule;
+// @dbx-tools/appkit-mastra 0.3.x namespaces its exports per module, so pull the
+// agent builder, canonical Genie orchestration prompt, and mastra plugin out of
+// their respective namespaces.
+const { createAgent } = agents;
+const { GENIE_INSTRUCTIONS } = mastraGenie;
+const { mastra } = mastraPlugin;
+const { email } = emailPlugin;
+const { emailTool } = emailToolModule;
+
+// Email is enabled only when the full SMTP credential set is present. The
+// email() plugin's config resolver THROWS on a partial config (host set but
+// user/password missing), which would crash boot - and on the Apps platform a
+// secret-backed valueFrom resolves to an empty string when the secret/binding
+// isn't in place. Requiring all three keeps the app booting (email just off)
+// until SMTP is fully wired, and gates the plugin + tool together.
+const EMAIL_ENABLED = Boolean(
+  process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASSWORD,
+);
+
+
+
+// Shared Postgres group role every Lakebase connection switches into via the
+// pool's `-c role=` option. The deployed app connects as its service
+// principal and local dev connects as the developer's own identity, so
+// without this the two identities own different tables in the same schemas -
+// and Postgres only lets the *owner* run ALTER TABLE. That is fatal rather
+// than cosmetic for Mastra: PostgresStore runs schema migrations on boot, so
+// whichever identity did not create the tables crashes the process. Owning
+// everything as one role both identities are members of makes thread storage
+// and semantic recall work in the deployed app and locally.
+//
+// scripts/grant-lakebase-schema.sh creates the role, adds both identities,
+// and reassigns existing objects. It runs before the app starts in
+// scripts/deploy.sh, which matters because a connection naming a role that
+// does not exist fails outright.
+const PG_APP_ROLE = "lens_iq_app";
 
 const LOCAL_SAMPLE_VIDEO_DIR = resolvePath(process.cwd(), "client/public/sample-videos");
 const VIDEO_CONTENT_TYPE = "video/mp4";
@@ -60,22 +106,24 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 
 // LensIQ AppKit server.
 //
-// Everything in this app runs as the app's service principal. There is no
-// `asUser(req)` anywhere - the SP holds the UC + serving + warehouse grants,
-// and HTTP routes never need the end user's identity for downstream calls.
-// resources/app.yml does declare `user_api_scopes` (sql + dashboards.genie)
-// so the Databricks Apps proxy forwards the user's `X-Forwarded-Access-Token`;
-// the only thing that header gates today is the Genie chat in the UI (see the
-// /api/auth/obo route below) - downstream calls still run as the SP.
+// Most custom routes (detect, faces, volumes, Lakebase app tables) run as the
+// app service principal. The "Ask LensIQ" Mastra chat is the exception: the
+// `@dbx-tools/appkit-mastra` plugin wraps each turn in `asUser(req)` so Genie,
+// statementExecution, and the model-picker serving catalogue resolve with the
+// signed-in user's OBO token. That needs `user_api_scopes` on the app
+// resource (sql, dashboards.genie, serving.serving-endpoints in
+// resources/app.yml) so the Apps proxy forwards `X-Forwarded-Access-Token`.
+// /api/auth/obo below only checks that header's presence so the UI can hide
+// the chat on the public frp tunnel (no OBO token there).
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
 //   - analytics(): file-based SQL queries against the SQL warehouse (SP).
-//   - serving({ llm, detector, license_plate, spill, wet_floor_sign,
-//               slip_fall, fog_detector }):
-//     One Databricks Model Serving endpoint per use case. Each alias is
-//     bound to its own UC registered model + endpoint. The model selected
-//     by the client maps 1:1 to its `servingAlias` (see client/src/lib/models.ts).
+//   - serving({ llm, detector, license_plate, slip_fall, fog_detector,
+//               face_recognition }):
+//     Dedicated custom-model aliases plus one shared `llm` alias for the
+//     Claude vision workflows. The model selected by the client maps to its
+//     `servingAlias` (see client/src/lib/models.ts).
 //   - files({ volumes: { frames, inbox, sample_videos } }): UC volumes
 //     (frames for app captures, inbox for the SDP pipeline, sample_videos
 //     for the demo MP4 catalog). All run as SP. The `sample_videos` volume
@@ -118,7 +166,7 @@ const STORE_IDS = [
 // doesn't carry store_id (the demo app is single-tenant) but the UC mirror
 // needs one so Genie can group by store.
 function _randomStoreId(): string {
-  return STORE_IDS[Math.floor(Math.random() * STORE_IDS.length)];
+  return STORE_IDS[Math.floor(Math.random() * STORE_IDS.length)] ?? STORE_IDS[0];
 }
 
 // Build a multi-row INSERT against a UC table reachable through the analytics
@@ -312,8 +360,11 @@ async function _streamLocalSampleVideo(
   if (rangeHeader && typeof rangeHeader === "string") {
     const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
     if (match) {
-      const start = match[1] === "" ? 0 : Number.parseInt(match[1], 10);
-      const end = match[2] === "" ? totalSize - 1 : Number.parseInt(match[2], 10);
+      // Both groups are `\d*`, so an empty capture means "open-ended" on
+      // that side of the range rather than a missing group.
+      const [, startRaw = "", endRaw = ""] = match;
+      const start = startRaw === "" ? 0 : Number.parseInt(startRaw, 10);
+      const end = endRaw === "" ? totalSize - 1 : Number.parseInt(endRaw, 10);
       if (
         Number.isFinite(start) && Number.isFinite(end) &&
         start >= 0 && end < totalSize && start <= end
@@ -559,17 +610,24 @@ await renderQueryFiles();
 // Mastra agent (via @dbx-tools/appkit-mastra) that drives the LensIQ
 // Detections Genie space as a set of tools: it asks the space focused
 // sub-questions, streams progress into the chat, and embeds inline
-// charts / data tables the @dbx-tools/appkit-mastra-ui <MastraChat>
+// charts / data tables the @dbx-tools/ui-mastra <MastraChat>
 // component renders. GENIE_INSTRUCTIONS is the canonical Genie
 // orchestration prompt; `plugins.genie?.toolkit()` is auto-discovered
 // from the registered genie() plugin at runtime (so this definition is
 // inert when no Genie space is configured - we only register the
 // mastra() plugin below when DATABRICKS_GENIE_SPACE_ID is set). The
-// agent's model resolves to the same Claude endpoint the vision
-// detector uses (DATABRICKS_SERVING_ENDPOINT_LLM); when unset the
-// plugin falls back to its dynamic capability-class picker.
+// agent is pinned to Claude Opus 4.8: newer Opus endpoints stream
+// extended-thinking blocks as an array under `delta.content`, which the
+// AI SDK's OpenAI-compatible chunk parser rejects (AI_TypeValidationError).
 const lensIqAgent = createAgent({
-  name: "lensiq",
+  // Agent id MUST NOT equal or contain any non-public env var value, or
+  // AppKit's client-config sanitizer redacts it to "[redacted by appkit]"
+  // in the boot payload and the chat then streams to a bogus agent id (404).
+  // "lensiq" collided with PGDATABASE ("lensiq", injected by the Lakebase
+  // resource binding), so this is intentionally a distinct id. It also
+  // determines the per-agent Mastra storage schema (mastra_fleet_analyst),
+  // so keeping it decoupled from the DB name avoids a schema-ownership clash.
+  name: "fleet-analyst",
   instructions: [
     "You are LensIQ, a data analyst for a fleet of quick-serve restaurant",
     "cameras. Answer questions about temperatures, alerts, license plates,",
@@ -581,14 +639,20 @@ const lensIqAgent = createAgent({
     "",
     GENIE_INSTRUCTIONS,
   ].join("\n"),
-  ...(process.env.DATABRICKS_SERVING_ENDPOINT_LLM
-    ? { model: process.env.DATABRICKS_SERVING_ENDPOINT_LLM }
-    : {}),
+  model: "databricks-claude-opus-4-8",
   tools(plugins) {
-    // Genie toolkit only (ask_genie, get_statement, prepare_chart, ...),
-    // mirroring the data-only scope the old <GenieChat> had. The `?.`
-    // guard keeps this safe if the genie() plugin isn't registered.
-    return { ...(plugins.genie?.toolkit() ?? {}) };
+    // Genie toolkit (ask_genie, get_statement, prepare_chart, ...) for data
+    // questions; the `?.` guard keeps this safe if the genie() plugin isn't
+    // registered. Plus the approval-gated send_email tool from @dbx-tools/email
+    // when SMTP is configured: the model can draft a message but execution
+    // pauses until the user clicks Approve in the MastraChat UI, then it
+    // sends over SMTP (sender derived from the OBO user on EMAIL_DOMAIN).
+    // requireApproval suspends the run into PostgresStore, so it needs the
+    // mastra() storage below to be on.
+    return {
+      ...(plugins.genie?.toolkit() ?? {}),
+      ...(EMAIL_ENABLED ? { send_email: emailTool() } : {}),
+    };
   },
 });
 
@@ -621,13 +685,11 @@ const AppKit = await createApp({
     analytics({}),
     serving({
       // Only register endpoints whose env vars are populated. The platform
-      // sets each env var from the matching `resources/app.yml` binding;
-      // scripts/deploy.sh drops bindings for endpoints that aren't deployed
-      // yet (e.g. ROBOFLOW_API_KEY unset -> license_plate / slip_fall
-      // bindings dropped). Registering an alias with an unset env var
-      // makes AppKit's resource registry fail strict validation at boot
-      // (ConfigurationError: Missing required resources). Filtering here
-      // mirrors the app.yml filter so the app still starts; invocations
+      // sets each env var from the matching `resources/app.yml` binding.
+      // Registering an alias with an unset env var makes AppKit's resource
+      // registry fail strict validation at boot (ConfigurationError:
+      // Missing required resources). Filtering lets local or partially
+      // configured environments start; invocations
       // against a missing alias surface as EndpointNotDeployedError via
       // serving-invoke.ts.
       //
@@ -646,15 +708,16 @@ const AppKit = await createApp({
           slip_fall: { env: "DATABRICKS_SERVING_ENDPOINT_SLIP_FALL" },
           fog_detector: { env: "DATABRICKS_SERVING_ENDPOINT_FOG_DETECTOR" },
           face_recognition: { env: "DATABRICKS_SERVING_ENDPOINT_FACE_RECOGNITION" },
-        }      ).filter(([, cfg]) => Boolean(process.env[cfg.env])),
+        }).filter(([, cfg]) => Boolean(process.env[cfg.env])),
       ),
     }),
-    // LensIQ Detections Genie space backs the "Ask LensIQ" chat. The plugin
-    // reads DATABRICKS_GENIE_SPACE_ID and registers it under the `default`
-    // alias, which client/src/components/AIChatButton.tsx renders via
-    // <GenieChat alias="default" />. Only register when the space id is set so
-    // the app still boots in environments without a Genie space; the chat
-    // button surfaces the missing-alias error from the plugin if it's absent.
+    // LensIQ Detections Genie space for the Mastra Genie toolkit
+    // (`plugins.genie?.toolkit()` -> ask_genie / prepare_chart / ...). The
+    // plugin reads DATABRICKS_GENIE_SPACE_ID and registers it under the
+    // `default` alias. UI is <MastraChat> in AIChatButton.tsx (same drop-in
+    // as the dbx-tools Stream demo), not AppKit's bare <GenieChat>. Only
+    // register when the space id is set so the app still boots without a
+    // space; the chat button is gated on OBO availability.
     ...(process.env.DATABRICKS_GENIE_SPACE_ID ? [genie()] : []),
     files({
       // Volumes are reached as the app service principal. The DAB declares
@@ -688,18 +751,41 @@ const AppKit = await createApp({
     // LAKEBASE_ENDPOINT are wired by the platform at deploy time and by
     // dev.sh locally. Service-principal pool (no asUser) since we only ever
     // write app-aggregated counts, never per-user data.
-    lakebase(),
+    lakebase({ pool: { options: `-c role=${PG_APP_ROLE}` } }),
+    // SMTP email plugin backing the agent's approval-gated send_email tool.
+    // Validates SMTP config + verifies connectivity at startup and primes the
+    // transport the tool reuses. Gated on EMAIL_ENABLED (full SMTP_* set) so
+    // the app still boots where email isn't configured; when off the send_email
+    // tool above is dropped too. Neutral default layout (no brand).
+    ...(EMAIL_ENABLED ? [email()] : []),
     // "Ask LensIQ" chat backend. Mounts the lensIqAgent under /api/mastra
     // with a streaming chat route the <MastraChat> UI drives over
     // @mastra/client-js. Registered after lakebase() so Mastra's thread
     // storage (PostgresStore) + semantic recall (PgVector) can open the
     // Lakebase pool; gated on the Genie space id like genie() above so the
     // app still boots without a space (the chat button is hidden then).
+    // Storage/memory are on everywhere - PG_APP_ROLE (see top of file) is
+    // what keeps their boot migrations working under both identities.
     ...(process.env.DATABRICKS_GENIE_SPACE_ID
-      ? [mastra({ storage: true, memory: true, agents: lensIqAgent })]
+      ? [
+        mastra({
+          storage: true,
+          memory: true,
+          agents: lensIqAgent,
+        }),
+      ]
       : []),
   ],
   onPluginsReady(appkit) {
+    // AppKit declares the files plugin's name as `string` rather than the
+    // literal "files", so PluginMap collapses that entry into an index
+    // signature and the accessor reads as possibly-undefined. The plugin is
+    // registered unconditionally above, so resolve it once here instead of
+    // re-asserting at each of the four volume call sites below. Named
+    // `volume` so it doesn't shadow the imported files() plugin factory.
+    const volume = appkit.files;
+    if (!volume) throw new Error("AppKit files plugin is not registered.");
+
     appkit.server.extend((app) => {
       app.get("/api/models", (_req, res) => {
         res.json({
@@ -729,13 +815,24 @@ const AppKit = await createApp({
       // Databricks Apps front-door proxy injects `X-Forwarded-Access-Token`
       // (the signed-in user's OAuth token) on every request once user
       // authorization is enabled and the app declares user_api_scopes. The
-      // public portr tunnel (scripts/start.sh) terminates *inside* the
+      // public frp tunnel (scripts/start.sh) terminates *inside* the
       // container and forwards straight to this listener, bypassing that
       // proxy, so the header is absent on tunnel traffic. The client uses
       // this to hide the Genie chat (which depends on the user token) when
-      // the app is reached over the tunnel. Header presence is the whole
-      // signal - we never read the token value here.
+      // the app is reached over the tunnel. Local/dev (NODE_ENV !==
+      // production) always reports true so Genie stays visible while
+      // testing. Header presence is the whole production signal - we never
+      // read the token value here.
       app.get("/api/auth/obo", (req, res) => {
+        // Local `bun run dev` sets NODE_ENV=development and
+        // never has an Apps-proxy OBO header. Always report available so the
+        // Genie chat stays in the demo during local testing. Deployed apps
+        // set NODE_ENV=production (app.yaml) and keep the real header check
+        // so the public frp tunnel still hides Genie.
+        if (process.env.NODE_ENV !== "production") {
+          res.json({ obo: true });
+          return;
+        }
         const token = req.headers["x-forwarded-access-token"];
         res.json({ obo: typeof token === "string" && token.length > 0 });
       });
@@ -838,7 +935,7 @@ const AppKit = await createApp({
           const def = PRESENTER_CONTENT[params.id];
           if (!def) throw new HttpError(404, `Unknown presenter content id: ${params.id}`);
           if (await _streamLocalPresenterContent(def, res)) return;
-          if (await _streamVolumePresenterContent(appkit.files("presenter_content"), def, res)) return;
+          if (await _streamVolumePresenterContent(volume("presenter_content"), def, res)) return;
           throw new HttpError(404, `${def.filename} not found locally or in the presenter_content volume.`);
         },
       ));
@@ -865,9 +962,10 @@ const AppKit = await createApp({
         { body: TalkTrackTransformBody },
         async ({ body }) => {
           const def = PRESENTER_CONTENT["talk-track"];
+          if (!def) throw new HttpError(500, "Presenter content catalog is missing the talk-track entry.");
           const source = await _readPresenterContentText(
             def,
-            appkit.files("presenter_content"),
+            volume("presenter_content"),
           );
           if (!source) {
             throw new HttpError(
@@ -890,7 +988,7 @@ const AppKit = await createApp({
           if (!sample) throw new HttpError(404, `Unknown sample id: ${params.id}`);
           if (sample.local) {
             if (await _streamLocalSampleVideo(sample.local, req, res)) return;
-            if (await _streamVolumeSampleVideo(appkit.files("sample_videos"), sample.local, res)) return;
+            if (await _streamVolumeSampleVideo(volume("sample_videos"), sample.local, res)) return;
             throw new HttpError(404, `Sample ${sample.id} not found locally or in the sample_videos volume.`);
           }
           if (sample.upstream) {
@@ -1086,7 +1184,7 @@ const AppKit = await createApp({
             if (!buffer) throw new Error("Could not decode base64 image.");
             const frameId = `frame_${Date.now()}`;
             const fileName = `${frameId}.jpg`;
-            await appkit.files("frames").upload(fileName, buffer, { overwrite: true });
+            await volume("frames").upload(fileName, buffer, { overwrite: true });
 
             // Insert one row per detection so the Detections page (driven by
             // /api/detections/stream and the recent-detections query) picks
@@ -1094,10 +1192,9 @@ const AppKit = await createApp({
             // derive distinct ids from `Date.now() + i` to avoid collisions
             // within a single capture.
             const baseId = Date.now();
-            const storeId = STORE_IDS[Math.floor(Math.random() * STORE_IDS.length)];
+            const storeId = _randomStoreId();
             const ts = new Date().toISOString();
-            for (let i = 0; i < detections.length; i++) {
-              const d = detections[i];
+            for (const [i, d] of detections.entries()) {
               await appkit.analytics.query(DETECTIONS_INSERT_SQL, {
                 id: sql.bigint(baseId + i),
                 frame_id: sql.string(frameId),
@@ -1337,6 +1434,28 @@ const AppKit = await createApp({
         );
       });
 
+      // Lakebase table backing the Beverage page beer-fill flush. Each row is
+      // the number of glasses in one fill bucket (full/half/low) on one feed
+      // at one tick; the time-series chart re-aggregates them with AVG per
+      // bucket. Same lazy-ensure pattern as guest_counts so a fresh Lakebase
+      // project works without any manual migration.
+      const _ensureBeerFillsTable = onceAsync(async () => {
+        await _ensureAppSchema();
+        await _runIdempotentDdl(`
+          CREATE TABLE IF NOT EXISTS ${APP_SCHEMA}.beer_fills (
+            id          BIGSERIAL PRIMARY KEY,
+            ts          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            source_id   TEXT NOT NULL,
+            fill_bucket TEXT NOT NULL,
+            glass_count INT NOT NULL,
+            store_id    TEXT
+          )
+        `);
+        await _runIdempotentDdl(
+          `CREATE INDEX IF NOT EXISTS idx_beer_fills_ts ON ${APP_SCHEMA}.beer_fills (ts DESC)`,
+        );
+      });
+
       // Guest-count persistence backed by Lakebase Postgres. The Guests page
       // posts batched zone counts here; the time-series chart reads recent
       // buckets back out.
@@ -1366,16 +1485,63 @@ const AppKit = await createApp({
           const ts = new Date().toISOString();
           const baseId = Date.now();
           const mirrorRows = body.batch.map((row, i) => ({
-            id:           sql.bigint(baseId + i),
-            ts:           sql.timestamp(ts),
-            source_id:    sql.string(row.source_id),
-            zone:         sql.string(row.zone),
+            id: sql.bigint(baseId + i),
+            ts: sql.timestamp(ts),
+            source_id: sql.string(row.source_id),
+            zone: sql.string(row.zone),
             person_count: sql.bigint(row.person_count),
-            store_id:     sql.string(row.store_id ?? _randomStoreId()),
+            store_id: sql.string(row.store_id ?? _randomStoreId()),
           }));
           void _mirrorToUC(
             "guest_counts",
             ["id", "ts", "source_id", "zone", "person_count", "store_id"],
+            mirrorRows,
+          );
+          return { inserted: result.rowCount ?? 0 };
+        },
+      ));
+
+      // Beer-fill persistence backed by Lakebase Postgres. The Beverage page
+      // posts batched per-bucket glass counts here (full / half / low fill
+      // levels from the beer_full/beer_half/beer_low Claude vision trio); the
+      // time-series chart reads recent buckets back out.
+      const BeerFillRow = z.object({
+        source_id: z.string().min(1),
+        // Fill bucket, stripped of the `beer_` model prefix.
+        fill_bucket: z.enum(["full", "half", "low"]),
+        glass_count: z.number().int().min(0),
+        store_id: z.string().nullish(),
+      });
+      const BeerFillsBatch = z.object({
+        batch: z.array(BeerFillRow).min(1).max(200),
+      });
+
+      app.post("/api/beer-fills", asyncRoute(
+        { body: BeerFillsBatch },
+        async ({ body }) => {
+          await _ensureBeerFillsTable();
+          const { sql: stmt, params } = buildBatchInsert(
+            `${APP_SCHEMA}.beer_fills`,
+            ["source_id", "fill_bucket", "glass_count", "store_id"],
+            body.batch,
+          );
+          const result = await appkit.lakebase.query(stmt, params);
+          // UC mirror so Genie can answer beverage-service questions ("how
+          // many glasses were running low tonight"). store_id falls back to a
+          // random fleet store when the client doesn't tag its rows.
+          const ts = new Date().toISOString();
+          const baseId = Date.now();
+          const mirrorRows = body.batch.map((row, i) => ({
+            id: sql.bigint(baseId + i),
+            ts: sql.timestamp(ts),
+            source_id: sql.string(row.source_id),
+            fill_bucket: sql.string(row.fill_bucket),
+            glass_count: sql.bigint(row.glass_count),
+            store_id: sql.string(row.store_id ?? _randomStoreId()),
+          }));
+          void _mirrorToUC(
+            "beer_fills",
+            ["id", "ts", "source_id", "fill_bucket", "glass_count", "store_id"],
             mirrorRows,
           );
           return { inserted: result.rowCount ?? 0 };
@@ -1451,7 +1617,9 @@ const AppKit = await createApp({
               if (cleaned.length >= 3 && cleaned !== "UNREADABLE") plateText = cleaned;
             }
             if (Array.isArray(parsed.bbox) && parsed.bbox.length === 4 && parsed.bbox.every((v) => typeof v === "number")) {
-              const [x1, y1, x2, y2] = parsed.bbox as number[];
+              // The guard above establishes the length and element type; the
+              // tuple assertion is what carries that over to the compiler.
+              const [x1, y1, x2, y2] = parsed.bbox as [number, number, number, number];
               if (x1 >= 0 && y1 >= 0 && x2 <= 1 && y2 <= 1 && x1 < x2 && y1 < y2) {
                 plateBbox = [x1, y1, x2, y2];
               }
@@ -1540,13 +1708,13 @@ const AppKit = await createApp({
           const ts = new Date().toISOString();
           const baseId = Date.now();
           const mirrorRows = body.batch.map((row, i) => ({
-            id:                   sql.bigint(baseId + i),
-            ts:                   sql.timestamp(ts),
-            source_id:            sql.string(row.source_id),
-            store_id:             sql.string(_randomStoreId()),
-            plate_text:           sql.string(row.plate_text),
-            confidence:           sql.double(row.confidence),
-            ocr_model:            row.ocr_model != null ? sql.string(row.ocr_model) : null,
+            id: sql.bigint(baseId + i),
+            ts: sql.timestamp(ts),
+            source_id: sql.string(row.source_id),
+            store_id: sql.string(_randomStoreId()),
+            plate_text: sql.string(row.plate_text),
+            confidence: sql.double(row.confidence),
+            ocr_model: row.ocr_model != null ? sql.string(row.ocr_model) : null,
             detection_confidence: row.detection_confidence != null ? sql.double(row.detection_confidence) : null,
           }));
           void _mirrorToUC(
@@ -1638,14 +1806,14 @@ const AppKit = await createApp({
           const ts = new Date().toISOString();
           const baseId = Date.now();
           const mirrorRows = body.batch.map((row, i) => ({
-            id:           sql.bigint(baseId + i),
-            ts:           sql.timestamp(ts),
-            source_id:    sql.string(row.source_id),
-            store_id:     sql.string(_randomStoreId()),
+            id: sql.bigint(baseId + i),
+            ts: sql.timestamp(ts),
+            source_id: sql.string(row.source_id),
+            store_id: sql.string(_randomStoreId()),
             camera_label: sql.string(row.camera_label),
-            fogged:       sql.boolean(row.fogged),
+            fogged: sql.boolean(row.fogged),
             region_count: sql.bigint(row.region_count),
-            area_pct:     sql.double(row.area_pct),
+            area_pct: sql.double(row.area_pct),
           }));
           void _mirrorToUC(
             "fog_observations",
@@ -1771,14 +1939,14 @@ const AppKit = await createApp({
             "spill_cycles",
             ["id", "ts", "source_id", "store_id", "spill_first_ts", "cone_first_ts", "response_ms", "was_assisted"],
             [{
-              id:             sql.bigint(Date.now()),
-              ts:             sql.timestamp(new Date().toISOString()),
-              source_id:      sql.string(body.source_id),
-              store_id:       sql.string(_randomStoreId()),
+              id: sql.bigint(Date.now()),
+              ts: sql.timestamp(new Date().toISOString()),
+              source_id: sql.string(body.source_id),
+              store_id: sql.string(_randomStoreId()),
               spill_first_ts: sql.timestamp(body.spill_first_ts),
-              cone_first_ts:  sql.timestamp(body.cone_first_ts),
-              response_ms:    sql.bigint(body.response_ms),
-              was_assisted:   sql.boolean(body.was_assisted),
+              cone_first_ts: sql.timestamp(body.cone_first_ts),
+              response_ms: sql.bigint(body.response_ms),
+              was_assisted: sql.boolean(body.was_assisted),
             }],
           );
           return { inserted: r.rowCount ?? 0 };
@@ -2168,13 +2336,13 @@ const AppKit = await createApp({
                 "face_matches",
                 ["id", "ts", "source_id", "store_id", "face_id", "name", "role", "similarity"],
                 [{
-                  id:         sql.bigint(now),
-                  ts:         sql.timestamp(new Date(now).toISOString()),
-                  source_id:  sql.string(body.source_id),
-                  store_id:   sql.string(_randomStoreId()),
-                  face_id:    sql.bigint(match.face_id),
-                  name:       sql.string(match.name),
-                  role:       sql.string(match.role),
+                  id: sql.bigint(now),
+                  ts: sql.timestamp(new Date(now).toISOString()),
+                  source_id: sql.string(body.source_id),
+                  store_id: sql.string(_randomStoreId()),
+                  face_id: sql.bigint(match.face_id),
+                  name: sql.string(match.name),
+                  role: sql.string(match.role),
                   similarity: sql.double(match.similarity),
                 }],
               );
@@ -2335,6 +2503,32 @@ const AppKit = await createApp({
         },
       ));
 
+      // Beverage page time-series: average glasses per fill bucket over time.
+      // Same window/bucket contract + bucketing math as guest-counts/recent,
+      // grouped by fill_bucket instead of zone.
+      type BeerBucketRow = {
+        fill_bucket: string; bucket_ts: string;
+        avg_count: number; max_count: number;
+      };
+      app.get("/api/beer-fills/recent", asyncRoute(
+        { query: BucketWindowQuery },
+        async ({ query }) => {
+          await _ensureBeerFillsTable();
+          const r = await appkit.lakebase.query<BeerBucketRow>(`
+            SELECT
+              fill_bucket,
+              to_timestamp(floor(extract(epoch FROM ts) / $1) * $1) AS bucket_ts,
+              ROUND(AVG(glass_count)::numeric, 2)::float AS avg_count,
+              MAX(glass_count) AS max_count
+            FROM ${APP_SCHEMA}.beer_fills
+            WHERE ts >= NOW() - ($2 || ' seconds')::interval
+            GROUP BY fill_bucket, bucket_ts
+            ORDER BY bucket_ts ASC, fill_bucket ASC
+          `, [query.bucketSec, String(query.windowSec)]);
+          return { windowSec: query.windowSec, bucketSec: query.bucketSec, rows: r.rows };
+        },
+      ));
+
       // Centralized error middleware. Routes can throw - HttpError /
       // ZodError / EndpointNotDeployedError are turned into the right
       // status here so handlers don't have to.
@@ -2347,7 +2541,7 @@ const AppKit = await createApp({
     // whose env var is populated (matching the `serving({ endpoints })`
     // filter above), and pings each one every 15 s between 6am ET and
     // 10pm PT. Toggle off with SERVING_ENDPOINT_KEEP_ALIVE=false.
-    startServingKeepAlive(appkit);
+    startServingKeepAlive();
   },
 });
 

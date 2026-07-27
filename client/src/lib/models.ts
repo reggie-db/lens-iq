@@ -48,7 +48,9 @@ export interface ModelDefinition {
   servingAlias: string;
 }
 
-export const MODELS: ModelDefinition[] = [
+// Typed as a non-empty tuple so `MODELS[0]` is a definite ModelDefinition -
+// callers use it as the fallback when a model id doesn't resolve.
+export const MODELS: [ModelDefinition, ...ModelDefinition[]] = [
   {
     id: "yolo",
     name: "YOLO (general objects)",

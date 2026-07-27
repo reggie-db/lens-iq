@@ -137,7 +137,7 @@ function FrameCard({ frame }: FrameCardProps) {
   );
 }
 
-function _StatTile({ label, value, hint }: { label: string; value: string | number; hint?: string }) {
+function _StatTile({ label, value, hint }: { label: string; value: string | number; hint?: string | undefined }) {
   return (
     <Card>
       <CardContent className="p-4">

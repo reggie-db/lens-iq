@@ -4,7 +4,7 @@
    (@source) so the chat's utility classes are generated, and paints
    shiki's per-token SQL colors. Defines no design tokens - the chat
    inherits LensIQ's AppKit theme below. */
-@import "@dbx-tools/appkit-mastra-ui/styles.css";
+@import "@dbx-tools/ui-mastra/styles.css";
 /* DM Sans / DM Mono are loaded via <link> in client/index.html instead of an
    @import here, because Vite inlines the AppKit styles.css ahead of any
    downstream @import url() and PostCSS rejects that ordering. */

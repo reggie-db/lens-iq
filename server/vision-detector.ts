@@ -54,7 +54,7 @@ export interface VisionDetection {
   /** [x1, y1, x2, y2] in the same pixel coord space as the input image. */
   bbox: [number, number, number, number];
   /** Optional one-line model rationale (Claude often includes it). */
-  reason?: string;
+  reason?: string | undefined;
 }
 
 const VISION_ALIAS = "llm";
@@ -113,6 +113,7 @@ function _imageSize(bytes: Buffer, mime: string): { w: number; h: number } | nul
     while (i < bytes.length) {
       if (bytes[i] !== 0xff) return null;
       const marker = bytes[i + 1];
+      if (marker === undefined) return null;
       i += 2;
       if (marker === 0xd8 || marker === 0xd9) return null;
       const len = bytes.readUInt16BE(i);
@@ -441,7 +442,7 @@ export interface DetectWithClaudeOptions {
    * floor is light grey") or scope qualifiers ("only flag spills
    * larger than a coin"). Kept out of the cache key by hashing.
    */
-  promptAddendum?: string;
+  promptAddendum?: string | undefined;
   /**
    * Optional frame fingerprint (64-hex-char SHA-256 of normalized decoded
    * pixels) from the client capture. When present it seeds the cache key
@@ -449,7 +450,7 @@ export interface DetectWithClaudeOptions {
    * collide on an exact-match lookup while distinct frames stay distinct.
    * When absent, caching falls back to a raw byte-hash match.
    */
-  frameFingerprint?: string;
+  frameFingerprint?: string | undefined;
   /**
    * Optional persistent L2 cache (e.g. Lakebase). Checked after the
    * in-process LRU on the way in and populated alongside it on a model

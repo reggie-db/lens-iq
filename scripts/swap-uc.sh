@@ -6,7 +6,9 @@
 # can't reach:
 #   - notebooks/*.ipynb                    (widget defaults)
 #   - resources/genie_space_*.json         (Genie data_sources.tables)
+#   - scripts/_build-genie-space.py        (Genie JSON generator defaults)
 #   - pipelines/pizza_vision_pipeline.py   (default Spark conf values)
+#   - server/uc.ts                         (runtime fallback defaults)
 #   - .env                                 (volume paths + DATABRICKS_CATALOG /
 #                                            DATABRICKS_SCHEMA + BUNDLE_VAR_catalog)
 #   - app.yaml                             (DATABRICKS_CATALOG / DATABRICKS_SCHEMA env values)
@@ -108,6 +110,8 @@ _sed -E "s|^BUNDLE_VAR_catalog=.*|BUNDLE_VAR_catalog=${_NEW_CATALOG}|"          
 # 3. app.yaml runtime env values.
 _sed -E "/^  - name: DATABRICKS_CATALOG/,/value:/ s|value: ${_current_catalog}|value: ${_NEW_CATALOG}|" app.yaml
 _sed -E "/^  - name: DATABRICKS_SCHEMA/,/value:/  s|value: ${_current_schema}|value: ${_NEW_SCHEMA}|"  app.yaml
+_sed -E "s|const DEFAULT_CATALOG = \"${_current_catalog}\"|const DEFAULT_CATALOG = \"${_NEW_CATALOG}\"|" server/uc.ts
+_sed -E "s|const DEFAULT_SCHEMA = \"${_current_schema}\"|const DEFAULT_SCHEMA = \"${_NEW_SCHEMA}\"|" server/uc.ts
 
 # 4. SQL queries: nothing to do. config/queries/*.sql.tmpl use
 #    `${catalog}` / `${schema}` placeholders rendered at app boot by
@@ -118,6 +122,9 @@ for f in resources/genie_space_*.json; do
   [[ -f "$f" ]] || continue
   _sed -E "s|${_current_catalog}\.${_current_schema}\.|${_NEW_CATALOG}.${_NEW_SCHEMA}.|g" "$f"
 done
+_sed -E "s|${_current_catalog}\.${_current_schema}|${_NEW_CATALOG}.${_NEW_SCHEMA}|g" scripts/_build-genie-space.py
+_sed -E "s|_CATALOG = \"${_current_catalog}\"|_CATALOG = \"${_NEW_CATALOG}\"|" scripts/_build-genie-space.py
+_sed -E "s|_SCHEMA = \"${_current_schema}\"|_SCHEMA = \"${_NEW_SCHEMA}\"|" scripts/_build-genie-space.py
 
 # 6. Notebook widget defaults. The widgets are quoted JSON strings, so
 # the escapes look weird but are correct for an embedded .ipynb cell.

@@ -10,7 +10,7 @@ Genie space JSON has strict validation rules:
   - `description` / `content` / `sql` are arrays of strings.
   - At most 1 text_instruction per space.
 
-See https://learn.microsoft.com/en-us/azure/databricks/genie/conversation-api
+See https://docs.databricks.com/api/workspace/genie
 for the full schema.
 
 Run me with:
@@ -25,7 +25,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _OUT_PATH = _REPO_ROOT / "resources" / "genie_space_lensiq_detections.json"
-_CATALOG = "retail_consumer_goods"
+_CATALOG = "reggie_pierce_aws_catalog"
 _SCHEMA = "lens_iq"
 
 
@@ -93,13 +93,13 @@ _EXAMPLE_SQLS: list[tuple[str, str]] = [
         "Vehicle detections per store: today vs yesterday",
         """WITH today AS (
   SELECT d.store_id, COUNT(*) AS detections
-  FROM retail_consumer_goods.lens_iq.detections d
+  FROM reggie_pierce_aws_catalog.lens_iq.detections d
   WHERE d.label = 'vehicle' AND d.ts >= NOW() - INTERVAL 24 HOURS
   GROUP BY d.store_id
 ),
 yesterday AS (
   SELECT d.store_id, COUNT(*) AS detections
-  FROM retail_consumer_goods.lens_iq.detections d
+  FROM reggie_pierce_aws_catalog.lens_iq.detections d
   WHERE d.label = 'vehicle'
     AND d.ts >= NOW() - INTERVAL 48 HOURS
     AND d.ts <  NOW() - INTERVAL 24 HOURS
@@ -110,7 +110,7 @@ SELECT
   COALESCE(t.detections, 0) AS detections_today,
   COALESCE(y.detections, 0) AS detections_yesterday,
   COALESCE(t.detections, 0) - COALESCE(y.detections, 0) AS delta
-FROM retail_consumer_goods.lens_iq.stores s
+FROM reggie_pierce_aws_catalog.lens_iq.stores s
 LEFT JOIN today t     ON t.store_id = s.id
 LEFT JOIN yesterday y ON y.store_id = s.id
 ORDER BY detections_today DESC""",
@@ -120,7 +120,7 @@ ORDER BY detections_today DESC""",
         """SELECT
   HOUR(d.ts) AS hour_of_day,
   COUNT(*)   AS vehicle_detections
-FROM retail_consumer_goods.lens_iq.detections d
+FROM reggie_pierce_aws_catalog.lens_iq.detections d
 WHERE d.label = 'vehicle'
   AND d.ts >= NOW() - INTERVAL 7 DAYS
 GROUP BY HOUR(d.ts)
@@ -133,7 +133,7 @@ ORDER BY hour_of_day""",
     d.store_id,
     COUNT_IF(d.label = 'vehicle') AS vehicles,
     COUNT_IF(d.label = 'person')  AS persons
-  FROM retail_consumer_goods.lens_iq.detections d
+  FROM reggie_pierce_aws_catalog.lens_iq.detections d
   WHERE d.ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY d.store_id
 )
@@ -143,7 +143,7 @@ SELECT
   m.persons,
   ROUND(m.persons / NULLIF(m.vehicles, 0) * 100, 1) AS pump_to_store_pct
 FROM metrics m
-JOIN retail_consumer_goods.lens_iq.stores s ON s.id = m.store_id
+JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = m.store_id
 ORDER BY pump_to_store_pct DESC""",
     ),
     (
@@ -153,8 +153,8 @@ ORDER BY pump_to_store_pct DESC""",
   COUNT(*) AS spill_cycles,
   ROUND(AVG(c.response_ms) / 1000.0, 1) AS avg_response_seconds,
   ROUND(MAX(c.response_ms) / 1000.0, 1) AS slowest_seconds
-FROM retail_consumer_goods.lens_iq.spill_cycles c
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = c.store_id
+FROM reggie_pierce_aws_catalog.lens_iq.spill_cycles c
+LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = c.store_id
 WHERE c.ts >= NOW() - INTERVAL 24 HOURS
 GROUP BY s.name
 ORDER BY avg_response_seconds DESC""",
@@ -163,13 +163,13 @@ ORDER BY avg_response_seconds DESC""",
         "Plate captures by state, this week vs last week",
         """WITH this_week AS (
   SELECT state, COUNT(*) AS plates
-  FROM retail_consumer_goods.lens_iq.license_plates
+  FROM reggie_pierce_aws_catalog.lens_iq.license_plates
   WHERE ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY state
 ),
 last_week AS (
   SELECT state, COUNT(*) AS plates
-  FROM retail_consumer_goods.lens_iq.license_plates
+  FROM reggie_pierce_aws_catalog.lens_iq.license_plates
   WHERE ts >= NOW() - INTERVAL 14 DAYS AND ts < NOW() - INTERVAL 7 DAYS
   GROUP BY state
 )
@@ -189,7 +189,7 @@ ORDER BY this_week DESC""",
   COUNT(DISTINCT store_id) AS stores_visited,
   COUNT(*)                 AS total_captures,
   COLLECT_SET(store_id)    AS store_ids
-FROM retail_consumer_goods.lens_iq.license_plates
+FROM reggie_pierce_aws_catalog.lens_iq.license_plates
 WHERE ts >= NOW() - INTERVAL 7 DAYS
 GROUP BY plate_masked
 HAVING stores_visited > 1
@@ -199,7 +199,7 @@ ORDER BY stores_visited DESC, total_captures DESC""",
         "Top firing rules at the store with the most critical alerts this week",
         """WITH worst AS (
   SELECT store_id, COUNT(*) AS critical_count
-  FROM retail_consumer_goods.lens_iq.alerts
+  FROM reggie_pierce_aws_catalog.lens_iq.alerts
   WHERE severity = 'critical' AND ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY store_id
   ORDER BY critical_count DESC
@@ -209,8 +209,8 @@ SELECT
   s.name AS store,
   a.rule_id,
   COUNT(*) AS fires
-FROM retail_consumer_goods.lens_iq.alerts a
-JOIN retail_consumer_goods.lens_iq.stores s ON s.id = a.store_id
+FROM reggie_pierce_aws_catalog.lens_iq.alerts a
+JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = a.store_id
 JOIN worst w ON w.store_id = a.store_id
 WHERE a.severity = 'critical' AND a.ts >= NOW() - INTERVAL 7 DAYS
 GROUP BY s.name, a.rule_id
@@ -223,8 +223,8 @@ LIMIT 3""",
   s.name                                AS store,
   ROUND(AVG(CASE WHEN c.online THEN 100.0 ELSE 0.0 END), 1) AS uptime_pct,
   COUNT(*)                              AS samples
-FROM retail_consumer_goods.lens_iq.camera_status c
-JOIN retail_consumer_goods.lens_iq.stores s ON s.id = c.store_id
+FROM reggie_pierce_aws_catalog.lens_iq.camera_status c
+JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = c.store_id
 WHERE c.ts >= NOW() - INTERVAL 24 HOURS
 GROUP BY s.name
 ORDER BY uptime_pct ASC""",
@@ -238,8 +238,8 @@ ORDER BY uptime_pct ASC""",
   COUNT_IF(f.fogged)              AS fogged_ticks,
   COUNT(*)                        AS total_ticks,
   ROUND(100.0 * COUNT_IF(f.fogged) / COUNT(*), 1) AS pct_of_time_fogged
-FROM retail_consumer_goods.lens_iq.fog_observations f
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = f.store_id
+FROM reggie_pierce_aws_catalog.lens_iq.fog_observations f
+LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = f.store_id
 WHERE f.ts >= NOW() - INTERVAL 24 HOURS
 GROUP BY s.name, f.camera_label
 ORDER BY pct_of_time_fogged DESC""",
@@ -252,8 +252,8 @@ ORDER BY pct_of_time_fogged DESC""",
   fm.name AS person,
   fm.role,
   ROUND(fm.similarity, 3) AS similarity
-FROM retail_consumer_goods.lens_iq.face_matches fm
-LEFT JOIN retail_consumer_goods.lens_iq.stores s ON s.id = fm.store_id
+FROM reggie_pierce_aws_catalog.lens_iq.face_matches fm
+LEFT JOIN reggie_pierce_aws_catalog.lens_iq.stores s ON s.id = fm.store_id
 WHERE fm.role = 'banned' AND fm.ts >= NOW() - INTERVAL 7 DAYS
 ORDER BY fm.ts DESC""",
     ),
@@ -266,8 +266,8 @@ ORDER BY fm.ts DESC""",
   ROUND(AVG(r.temperature), 1) AS avg_temp_f,
   ROUND(MAX(r.temperature), 1) AS peak_temp_f,
   COUNT_IF(r.temperature > 80) AS hot_hours
-FROM retail_consumer_goods.lens_iq.devices d
-JOIN retail_consumer_goods.lens_iq.device_readings r ON r.device_id = d.id
+FROM reggie_pierce_aws_catalog.lens_iq.devices d
+JOIN reggie_pierce_aws_catalog.lens_iq.device_readings r ON r.device_id = d.id
 WHERE r.ts >= NOW() - INTERVAL 24 HOURS
 GROUP BY d.id, d.name, d.location
 HAVING hot_hours >= 2
@@ -279,25 +279,25 @@ ORDER BY peak_temp_f DESC""",
   SELECT store_id,
          COUNT_IF(label = 'vehicle') AS vehicles,
          COUNT_IF(label = 'person')  AS persons
-  FROM retail_consumer_goods.lens_iq.detections
+  FROM reggie_pierce_aws_catalog.lens_iq.detections
   WHERE ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY store_id
 ),
 plates AS (
   SELECT store_id, COUNT(*) AS plates
-  FROM retail_consumer_goods.lens_iq.license_plates
+  FROM reggie_pierce_aws_catalog.lens_iq.license_plates
   WHERE ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY store_id
 ),
 alerts_w AS (
   SELECT store_id, COUNT(*) AS alerts
-  FROM retail_consumer_goods.lens_iq.alerts
+  FROM reggie_pierce_aws_catalog.lens_iq.alerts
   WHERE ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY store_id
 ),
 uptime AS (
   SELECT store_id, ROUND(AVG(CASE WHEN online THEN 100.0 ELSE 0.0 END), 1) AS camera_uptime_pct
-  FROM retail_consumer_goods.lens_iq.camera_status
+  FROM reggie_pierce_aws_catalog.lens_iq.camera_status
   WHERE ts >= NOW() - INTERVAL 7 DAYS
   GROUP BY store_id
 )
@@ -308,7 +308,7 @@ SELECT
   COALESCE(plates.plates, 0)   AS plates_captured,
   COALESCE(alerts_w.alerts, 0) AS alerts,
   COALESCE(uptime.camera_uptime_pct, 0) AS camera_uptime_pct
-FROM retail_consumer_goods.lens_iq.stores s
+FROM reggie_pierce_aws_catalog.lens_iq.stores s
 LEFT JOIN dets      ON dets.store_id     = s.id
 LEFT JOIN plates    ON plates.store_id   = s.id
 LEFT JOIN alerts_w  ON alerts_w.store_id = s.id
@@ -318,7 +318,7 @@ ORDER BY vehicle_detections DESC""",
 ]
 
 # Table spec: identifier -> (table_description, {column_name: column_description}).
-# All tables live under retail_consumer_goods.lens_iq. Column dicts are
+# All tables live under reggie_pierce_aws_catalog.lens_iq. Column dicts are
 # unordered here; the generator sorts them by name as Genie requires.
 _TABLES: dict[str, tuple[str, dict[str, str]]] = {
     "stores": (

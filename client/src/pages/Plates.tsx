@@ -198,13 +198,14 @@ export function PlatesPage({ isActive }: PlatesPageProps) {
             capturedAt: new Date(r.ts).getTime(),
             sourceId: r.source_id,
           }));
-        if (seeded.length === 0) return;
+        const newest = seeded[0];
+        if (!newest) return;
         setRecentPlates((prev) => (prev.length === 0 ? seeded : prev));
         // Prime the dedupe ref against the newest seeded plate so a
         // live OCR call that happens to return that same plate next
         // doesn't double-write it to postgres.
         if (lastAcceptedPlateRef.current === null) {
-          lastAcceptedPlateRef.current = seeded[0].plateText;
+          lastAcceptedPlateRef.current = newest.plateText;
         }
       })
       .catch(() => {

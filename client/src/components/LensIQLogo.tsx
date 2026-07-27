@@ -32,28 +32,28 @@ function _buildBlades(
   opts: IrisOptions = {},
 ): Array<{ d: string; fill: string }> {
   const { phi = 30, gap = 3.0, gapIn = 7 } = opts;
-  const N = 6;
-  const step = 360 / N;
+  // One blade per shade, so the blade count can never drift from the palette.
+  const step = 360 / LAVA_SHADES.length;
   const cx = R;
   const cy = R;
   const blades: Array<{ d: string; fill: string }> = [];
-  for (let k = 0; k < N; k++) {
+  LAVA_SHADES.forEach((fill, k) => {
     const a = k * step;
     const [ox1, oy1] = _polar(a + gap);
     const [ox2, oy2] = _polar(a + step - gap);
     const [ix1, iy1] = _polar(a + phi + gapIn);
     const [ix2, iy2] = _polar(a + step + phi - gapIn);
-    const O1 = [cx + R * ox1, cy + R * oy1];
-    const O2 = [cx + R * ox2, cy + R * oy2];
-    const I1 = [cx + r * ix1, cy + r * iy1];
-    const I2 = [cx + r * ix2, cy + r * iy2];
+    const O1: [number, number] = [cx + R * ox1, cy + R * oy1];
+    const O2: [number, number] = [cx + R * ox2, cy + R * oy2];
+    const I1: [number, number] = [cx + r * ix1, cy + r * iy1];
+    const I2: [number, number] = [cx + r * ix2, cy + r * iy2];
     const d =
       `M${O1[0].toFixed(2)},${O1[1].toFixed(2)} ` +
       `A${R},${R} 0 0 1 ${O2[0].toFixed(2)},${O2[1].toFixed(2)} ` +
       `L${I2[0].toFixed(2)},${I2[1].toFixed(2)} ` +
       `L${I1[0].toFixed(2)},${I1[1].toFixed(2)} Z`;
-    blades.push({ d, fill: LAVA_SHADES[k] });
-  }
+    blades.push({ d, fill });
+  });
   return blades;
 }
 

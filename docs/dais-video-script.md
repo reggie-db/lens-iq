@@ -1,5 +1,5 @@
 ﻿LensIQ — Demo Video Script (~4 minutes)
-App: https://lensiq.apps.dbx.tools/live
+App: https://lens-iq-7474652124440999.aws.databricksapps.com/live
 Github: https://github.com/reggie-db/dais-demos
 
 ________________
@@ -93,7 +93,7 @@ ________________
 
 Demo data quick-ref
 Thing                  Value
-App                    https://lensiq.apps.dbx.tools/live
+App                    https://lens-iq-7474652124440999.aws.databricksapps.com/live
 Pivotal spill clip     Aisle clip — spill at 0:01, cone at 0:27
 Guest feeds            Forecourt + c-store; conversion = in_store ÷ pump_users
 Face roles             banned (red) · VIP (gold) · staff (blue) · unknown (slate)

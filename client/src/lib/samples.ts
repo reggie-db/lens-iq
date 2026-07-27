@@ -51,7 +51,7 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
   {
     id: "expo-floor",
     name: "Databricks Summit expo floor",
-    description: "Crowds walking the Data + AI Summit exhibition hall: booth aisles and the main expo floor. Default Live source for booth displays; YOLO boxes the attendees as people.",
+    description: "Crowds walking the Data + AI Summit exhibition hall: booth aisles and the main expo floor. Live falls back to this clip when the webcam is unavailable; YOLO boxes the attendees as people.",
     local: "databricks-summit-expo-floor.mp4",
     models: ["yolo"],
   },
@@ -74,35 +74,35 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     name: "Pedestrians",
     description: "Outdoor sidewalk with multiple pedestrians walking. Ideal for people count.",
     local: "pedestrians-sidewalk.mp4",
-    models: ["people_count", "yolo"],
+    models: ["yolo"],
   },
   {
     id: "subway",
     name: "Subway crowd",
     description: "Dense subway crowd. Stress-tests people count and YOLO person detection.",
     local: "subway-crowd.mp4",
-    models: ["people_count", "yolo"],
+    models: ["yolo"],
   },
   {
     id: "market-square",
     name: "Market square",
     description: "Outdoor market scene with foot traffic. Good for people count + general YOLO.",
     local: "market-square.mp4",
-    models: ["people_count", "yolo"],
+    models: ["yolo"],
   },
   {
     id: "grocery-store",
     name: "Grocery store aisle",
     description: "Indoor retail aisle. Closest analog to a QSR/c-store interior - shoppers and products.",
     local: "grocery-store-aisle.mp4",
-    models: ["yolo", "people_count"],
+    models: ["yolo"],
   },
   {
     id: "milk-bottling-plant",
     name: "Industrial workers",
-    description: "Workers on an industrial line, often with PPE. Good for the hard hat / PPE model.",
+    description: "Workers on an industrial line, often with PPE. Useful for general person detection.",
     local: "industrial-ppe-line.mp4",
-    models: ["hard_hat", "yolo"],
+    models: ["yolo"],
   },
 
   // ---------------------------------------------------------------------------
@@ -127,9 +127,9 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
   {
     id: "cstore-interior",
     name: "C-store interior (CCTV)",
-    description: "HD overhead CCTV inside a convenience store: aisles, customers, register area. Strong fit for yolo and people_count. Also the `clear` baseline for the fog_detector when paired with cstore-foggy-lens.",
+    description: "HD overhead CCTV inside a convenience store: aisles, customers, register area. Strong fit for YOLO person detection and the `clear` baseline for the fog_detector when paired with cstore-foggy-lens.",
     local: "cstore-hd-cctv.mp4",
-    models: ["yolo", "people_count", "fog_detector"],
+    models: ["yolo", "fog_detector"],
   },
   {
     id: "aisle-spill-then-cone",
@@ -148,9 +148,9 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
   {
     id: "qsr-cafe-cctv",
     name: "QSR cafe interior (CCTV)",
-    description: "Multi-angle restaurant CCTV with timestamp watermark - customers at tables and counter. Strong fit for people_count, yolo, and slip_fall as people move through the dining area.",
+    description: "Multi-angle restaurant CCTV with timestamp watermark - customers at tables and counter. Strong fit for YOLO person detection and slip_fall as people move through the dining area.",
     local: "slip-fall-oviss.mp4",
-    models: ["people_count", "slip_fall", "yolo"],
+    models: ["slip_fall", "yolo"],
   },
   {
     id: "wet-floor-cone-closeup",
@@ -242,14 +242,14 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     name: "Grocery produce aisle (CCTV)",
     description: "Wide-angle daytime CCTV of a grocery store produce section: refrigerated produce cases, central baskets of apples and kiwi, shoppers and a cashier visible, store signage above. Crisp lens, every shelf legible. Default clear baseline for the fog_detector when paired with grocery-produce-aisle-foggy-lens.",
     local: "grocery-produce-aisle.mp4",
-    models: ["fog_detector", "yolo", "people_count"],
+    models: ["fog_detector", "yolo"],
   },
   {
     id: "grocery-produce-aisle-foggy-lens",
     name: "Grocery produce aisle (foggy lens)",
     description: "Synthetic partial-fog version of grocery-produce-aisle - same vantage with a heavy center-blob smudge over the weigh station and central produce baskets. The fog hides the busiest area of the camera's field of view while shopping carts at the edges stay sharp, which is the exact failure mode the fog_detector is designed to catch before downstream models miss shoplifters / spills.",
     local: "grocery-produce-aisle-foggy-lens.mp4",
-    models: ["fog_detector", "yolo", "people_count"],
+    models: ["fog_detector", "yolo"],
   },
 
   // ---------------------------------------------------------------------------
@@ -271,9 +271,9 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
   {
     id: "pizza-counter-dinein",
     name: "Pizza dining table (CCTV)",
-    description: "High-angle dining-area camera: a pepperoni pizza on a board with several hands taking slices, plus cups and plates around it. Exercises yolo (pizza + cup + person) and people_count.",
+    description: "High-angle dining-area camera: a pepperoni pizza on a board with several hands taking slices, plus cups and plates around it. Exercises YOLO pizza, cup, and person detection.",
     local: "pizza-counter-dinein.mp4",
-    models: ["yolo", "people_count"],
+    models: ["yolo"],
   },
   {
     id: "pizza-counter-prep",

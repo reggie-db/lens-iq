@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # dev.sh - one-shot local dev loop for the lens-iq app.
 #
-# Validates prerequisites (node, databricks CLI, auth), installs node deps
+# Validates prerequisites (bun, databricks CLI, auth), installs node deps
 # only if missing, verifies the workspace-side resources the app talks to
-# (warehouse, YOLO endpoint, volume), then launches `npm run dev`.
+# (warehouse, YOLO endpoint, volume), then launches `bun run dev`.
 #
 # Flags:
 #   --seed       run `lens-iq-seed` bundle job before starting (creates
@@ -14,7 +14,7 @@
 #                in the background so the Pipeline page has live data.
 #   --skip-checks  skip preflight resource verification (faster boot if you
 #                  know the workspace is already set up).
-#   --no-install   skip `npm install` even if node_modules is missing.
+#   --no-install   skip `bun install` even if node_modules is missing.
 #
 # Usage:
 #   ./dev.sh                       # plain dev loop, assumes setup done
@@ -50,15 +50,15 @@ _die() { printf "\033[1;31m[dev]\033[0m %s\n" "$*" >&2; exit 1; }
 _need() { command -v "$1" >/dev/null 2>&1 || _die "missing required tool: $1"; }
 
 # --- preflight: tools --------------------------------------------------------
-_need node
-_need npm
+_need bun
 _need databricks
 
-NODE_MAJOR="$(node -e 'process.stdout.write(String(process.versions.node.split(".")[0]))')"
-[[ "$NODE_MAJOR" -ge 22 ]] || _die "node >= 22 required (found $(node -v))"
+NODE_VERSION="$(bun -e 'process.stdout.write(process.versions.node)')"
+NODE_MAJOR="${NODE_VERSION%%.*}"
+[[ "$NODE_MAJOR" -ge 22 ]] || _die "node >= 22 required (bun reports ${NODE_VERSION})"
 
 # --- preflight: .env ---------------------------------------------------------
-[[ -f .env ]] || _die ".env not found - copy from .env.example or check git"
+[[ -f .env ]] || _die ".env not found - copy from .example.env or check git"
 set -a
 . ./.env
 set +a
@@ -74,8 +74,8 @@ _log "authenticated as $WHOAMI (profile=$PROFILE)"
 
 # --- node deps ---------------------------------------------------------------
 if [[ ! -d node_modules && "$NO_INSTALL" -eq 0 ]]; then
-  _log "installing node modules (no lockfile by design - resolves against registry.npmjs.org)"
-  npm install --no-package-lock
+  _log "installing node modules with bun"
+  bun install
 fi
 
 # --- optional one-shot bundle jobs ------------------------------------------
@@ -115,4 +115,4 @@ fi
 
 # --- run ---------------------------------------------------------------------
 _log "starting dev server on http://localhost:8000 (Ctrl+C to stop)"
-exec npm run dev
+exec bun run dev

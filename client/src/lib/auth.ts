@@ -2,10 +2,12 @@
 //
 // The Databricks Apps front-door proxy forwards the signed-in user's OAuth
 // token to the app on every request once user authorization is enabled. The
-// public portr tunnel (scripts/start.sh) bypasses that proxy, so no user
+// public frp tunnel (scripts/start.sh) bypasses that proxy, so no user
 // token is present over the tunnel. GET /api/auth/obo (server/server.ts)
 // turns that into a boolean the UI can branch on - currently used to hide
 // the Genie chat button, which depends on the user token, on tunnel traffic.
+// In local/dev (NODE_ENV !== production) the server always reports true so
+// Genie stays visible while testing.
 
 import { useEffect, useState } from "react";
 import { fetchJson } from "./serving-status";

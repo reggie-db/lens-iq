@@ -14,10 +14,12 @@ const STORES = [
   { id: "S-ATL-002", name: "Store #1248 - Atlanta North" },
   { id: "S-DAL-001", name: "Store #2145 - Dallas" },
   { id: "S-HOU-001", name: "Store #2389 - Houston" },
-];
+] as const;
+
+const DEFAULT_STORE_ID = STORES[0].id;
 
 export function InventoryPage() {
-  const [storeId, setStoreId] = useState<string>(STORES[0].id);
+  const [storeId, setStoreId] = useState<string>(DEFAULT_STORE_ID);
   const params = useMemo(() => ({ storeId: sql.string(storeId) }), [storeId]);
 
   const { data: pizza, loading: pizzaLoading } = useAnalyticsQuery("inventory_pizza", params);

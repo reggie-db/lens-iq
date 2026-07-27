@@ -4,7 +4,7 @@ import {
 } from "@databricks/appkit-ui/react";
 import {
   AlertTriangle, Camera, Car, CheckCircle2, CloudFog, Cone, DollarSign,
-  HardHat, MapPin, PiggyBank, ScanFace, ShieldAlert, Sparkles, TrendingDown,
+  MapPin, PiggyBank, ScanFace, ShieldAlert, Sparkles, TrendingDown,
   TrendingUp, Users,
 } from "lucide-react";
 import {
@@ -38,7 +38,6 @@ const COLOR = {
   guests: "#10b981",
   fog: "#06b6d4",
   faces: "#a855f7",
-  ppe: "#f97316",
   slate: "#64748b",
   ok: "#16a34a",
   warn: "#f59e0b",
@@ -114,7 +113,7 @@ const STORES: StoreSnapshot[] = [
   { id: "S-HOU-001", city: "Houston, TX",  format: "Standard",   health: "intervene", timeToCone: 142, conversion: 24, cameraHealth: 92,  weeklyIncidents: 5, headline: "Slow spill response Tue closing" },
   { id: "S-TAM-001", city: "Tampa, FL",    format: "Coastal",    health: "watch",     timeToCone: 94,  conversion: 33, cameraHealth: 98,  weeklyIncidents: 3, headline: "2 drive-off candidates flagged" },
   { id: "S-TAM-002", city: "Tampa, FL",    format: "Standard",   health: "healthy",   timeToCone: 68,  conversion: 39, cameraHealth: 100, weeklyIncidents: 1, headline: "VIP recognition: 4 hits" },
-  { id: "S-NAS-001", city: "Nashville, TN", format: "Flagship",  health: "healthy",   timeToCone: 75,  conversion: 47, cameraHealth: 100, weeklyIncidents: 0, headline: "Top PPE compliance" },
+  { id: "S-NAS-001", city: "Nashville, TN", format: "Flagship",  health: "healthy",   timeToCone: 75,  conversion: 47, cameraHealth: 100, weeklyIncidents: 0, headline: "Best camera uptime" },
   { id: "S-CHA-001", city: "Charlotte, NC", format: "Standard",  health: "watch",     timeToCone: 99,  conversion: 36, cameraHealth: 95,  weeklyIncidents: 2, headline: "Freezer dome cam needs wipe" },
 ];
 
@@ -607,12 +606,12 @@ function SpecialtyModelsSection() {
           Specialty models
         </CardTitle>
         <CardDescription>
-          Single-endpoint detectors with their own dollar line. Each one is
-          a notebook deploy plus a row in <code className="text-xs">app.yml</code>.
+          A dedicated detector with its own endpoint, version history, and
+          cost line, deployed from a notebook and bound in <code className="text-xs">resources/app.yml</code>.
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 gap-4">
           <SpecialtyCard
             icon={AlertTriangle}
             color="#10b981"
@@ -620,24 +619,6 @@ function SpecialtyModelsSection() {
             stat="3"
             statLabel="incidents auto-documented (30d)"
             blurb="Pair with spills for one row carrying hazard + incident timestamp + frame."
-            onClick={() => navigate("/live")}
-          />
-          <SpecialtyCard
-            icon={HardHat}
-            color={COLOR.ppe}
-            title="PPE compliance"
-            stat="91%"
-            statLabel="back-of-house weekly avg"
-            blurb="Coaching trend, not punitive. Compliance up 4pp in 6 weeks at S-NAS-001."
-            onClick={() => navigate("/live")}
-          />
-          <SpecialtyCard
-            icon={ShieldAlert}
-            color="#a855f7"
-            title="Age-gate / vape"
-            stat="17"
-            statLabel="alerts at counter (7d)"
-            blurb="Loss prevention at c-store counters. Manager intervenes before checkout."
             onClick={() => navigate("/live")}
           />
         </div>

@@ -7,7 +7,7 @@ bundle:
   engine: direct
 
 # Scope what gets uploaded for the Databricks App.
-# - exclude lockfiles: they encode resolved registry URLs which on a corporate-
+# - exclude the active lockfile: it encodes resolved registry URLs which on a corporate-
 #   proxied dev machine point at internal mirrors the Apps platform can't reach.
 #   Without a lock, the platform npm install resolves fresh from registry.npmjs.org.
 # - exclude tooling caches (.cursor, .vscode, .databricks state, .tmp).
@@ -16,11 +16,6 @@ bundle:
 # node_modules/ and other dev caches are already excluded via .gitignore.
 sync:
   exclude:
-    - package-lock.json
-    - npm-shrinkwrap.json
-    - yarn.lock
-    - pnpm-lock.yaml
-    - bun.lockb
     - bun.lock
     - "**/*.tsbuildinfo"
     - .cursor/
@@ -44,6 +39,9 @@ sync:
     # source of truth for both. Sync with scripts/sync-presenter-content.sh.
     - docs/booth-deck.html
     - docs/dais-talk-track.md
+    # README demo GIF stays in git for GitHub rendering, but exceeds the
+    # 10MB per-file Apps source-export limit so keep it out of the sync.
+    - docs/assets/*.gif
     # Research footage parked under .tmp/ (git-ignored).
     - .tmp/
 
@@ -69,7 +67,7 @@ variables:
   # reach.
   catalog:
     description: Existing Unity Catalog catalog name. Must already exist in the target workspace.
-    default: reggie_pierce_7405614800873570
+    default: reggie_pierce_aws_catalog
   schema:
     description: Schema for demo tables and the frame volume (created by the bundle).
     default: lens_iq
@@ -86,17 +84,20 @@ variables:
     default: databricks-claude-opus-4-7
   # ─── Genie space ───────────────────────────────────────────────────────
   # ID of the "LensIQ Detections" Genie space backing the "Ask LensIQ" chat
-  # (AppKit genie() plugin + <GenieChat>). DABs does not yet declare
-  # genie_spaces, so the space is (re-)created by scripts/deploy.sh from the
-  # serialized config at resources/genie_space_lensiq_detections.json, which
-  # caches the id in `.databricks/state/genie_space_id`. The app reads the id
-  # from the DATABRICKS_GENIE_SPACE_ID env var (app.yaml); this bundle var
-  # feeds the `genie_space` resource binding in resources/app.yml that grants
-  # the app SP CAN_RUN. deploy.sh passes the cached state id via --var on
-  # re-deploys; this default is the fallback for a plain `bundle deploy`.
+  # (AppKit genie() + @dbx-tools MastraChat Genie toolkit). DABs does not yet
+  # declare genie_spaces, so the space is (re-)created by scripts/deploy.sh
+  # from resources/genie_space_lensiq_detections.json, which caches the id in
+  # `.databricks/state/genie_space_id`. The app reads the id from the
+  # DATABRICKS_GENIE_SPACE_ID env var (app.yaml); this bundle var feeds the
+  # `genie_space` resource binding in resources/app.yml that grants the app
+  # SP CAN_RUN. deploy.sh passes the cached state id via --var on re-deploys;
+  # this default is the fallback for a plain `bundle deploy`.
+  # OBO scopes for the chat live on the app resource in resources/app.yml
+  # (sql, dashboards.genie, serving.serving-endpoints) - same set as the
+  # dbx-tools AppKit+Mastra demo.
   genie_space_id:
     description: Genie space ID created by scripts/deploy.sh from resources/genie_space_lensiq_detections.json.
-    default: "01f1648d45ec15bebd112142c2c897db"
+    default: "01f186bee4ce16f1ac00f8b0df1c88d6"
   # ─── Serving endpoint names ────────────────────────────────────────────
   # One endpoint per use case so each detector has its own UC registered
   # model, scale-to-zero schedule, workload size, and version history.
@@ -136,7 +137,7 @@ variables:
     description: Key inside `secret_scope` that holds the Roboflow API key (cold-start license check on Roboflow detector endpoints).
     default: roboflow_api_key
   apps_tunnel_secret_key:
-    description: Key inside `secret_scope` that holds the portr cli auth token (used only when TUNNEL_SUBDOMAIN is set).
+    description: Key inside `secret_scope` that holds the frp auth token (used only when AZURE_CONTAINER_APPS is set).
     default: tunnel_token
 
   # ─── Lakebase Autoscaling postgres binding ────────────────────────────

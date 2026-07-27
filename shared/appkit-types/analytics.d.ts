@@ -15,12 +15,34 @@ declare module "@databricks/appkit-ui/react" {
           /** INT - use sql.int() */
           max_rows: SQLNumberMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Unique alert id. */
+          id: number;
+          /** Rule identifier (e.g. temperature_critical, pizza_low_stock, camera_offline, vehicle_dwell_long). */
+          ruleId: string;
+          /** Human-readable alert text. */
+          message: string;
+          /** critical | warning | info. Treat critical as P1. */
+          severity: string;
+          /** Store associated with the alert. */
+          storeId: string;
+          /** Denormalized display name (matches stores.name). */
+          storeName: string;
+          /** @sqlType STRING */
+          ts: string;
+          /** Whether an operator has acknowledged the alert. */
+          acknowledged: boolean;
+        }>;
       };
     cameras_online: {
         name: "cameras_online";
         parameters: Record<string, never>;
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          hour: string;
+          /** @sqlType BIGINT */
+          cameras: number;
+        }>;
       };
     data_search: {
         name: "data_search";
@@ -34,12 +56,30 @@ declare module "@databricks/appkit-ui/react" {
           /** INT - use sql.int() */
           max_rows: SQLNumberMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          kind: string;
+          /** Unique detection id. */
+          id: number;
+          /** @sqlType STRING */
+          label: string;
+          /** Human-readable store name. Use this in answers, never the raw id. */
+          store: string;
+          /** @sqlType STRING */
+          ts: string;
+          /** @sqlType INT */
+          confidence: number;
+        }>;
       };
     detections_hourly: {
         name: "detections_hourly";
         parameters: Record<string, never>;
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          hour: string;
+          /** @sqlType BIGINT */
+          count: number;
+        }>;
       };
     detections_recent: {
         name: "detections_recent";
@@ -47,7 +87,18 @@ declare module "@databricks/appkit-ui/react" {
           /** INT - use sql.int() */
           max_rows: SQLNumberMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Unique detection id. */
+          id: number;
+          /** @sqlType STRING */
+          type: string;
+          /** @sqlType STRING */
+          location: string;
+          /** @sqlType STRING */
+          time: string;
+          /** @sqlType INT */
+          confidence: number;
+        }>;
       };
     detections_since: {
         name: "detections_since";
@@ -59,7 +110,24 @@ declare module "@databricks/appkit-ui/react" {
           /** TIMESTAMP - use sql.timestamp() */
           since: SQLTimestampMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Unique detection id. */
+          id: number;
+          /** Source video frame the detection came from. */
+          frame_id: string;
+          /** @sqlType STRING */
+          ts: string;
+          /** Store where the detection was captured. Joins to stores.id. */
+          store_id: string;
+          /** Class label: vehicle | truck | person | pizza | package. */
+          label: string;
+          /** COCO class id (2=vehicle, 0=person, 7=truck, 84=package, 53=pizza). */
+          class_id: number;
+          /** Model confidence 0.0 to 1.0. Filter < 0.5 for executive answers unless user asks for it. */
+          confidence: number;
+          /** Bounding box [x1, y1, x2, y2] integer pixels in the source frame. */
+          bbox: unknown[];
+        }>;
       };
     detections_summary: {
         name: "detections_summary";
@@ -67,7 +135,18 @@ declare module "@databricks/appkit-ui/react" {
           /** STRING - use sql.string() */
           period: SQLStringMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          object: string;
+          /** @sqlType BIGINT */
+          count: number;
+          /** @sqlType STRING */
+          trend: string;
+          /** @sqlType STRING */
+          icon: string;
+          /** @sqlType STRING */
+          color: string;
+        }>;
       };
     device_history: {
         name: "device_history";
@@ -79,12 +158,30 @@ declare module "@databricks/appkit-ui/react" {
           /** INT - use sql.int() */
           hours: SQLNumberMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          time: string;
+          /** @sqlType DOUBLE */
+          temperature: number;
+          /** @sqlType DOUBLE */
+          humidity: number;
+        }>;
       };
     device_stats: {
         name: "device_stats";
         parameters: Record<string, never>;
-        result: unknown;
+        result: Array<{
+          /** @sqlType BIGINT */
+          normalCount: number;
+          /** @sqlType BIGINT */
+          warningCount: number;
+          /** @sqlType BIGINT */
+          criticalCount: number;
+          /** @sqlType STRING */
+          avgTemp: string;
+          /** @sqlType BIGINT */
+          totalDevices: number;
+        }>;
       };
     devices: {
         name: "devices";
@@ -94,7 +191,20 @@ declare module "@databricks/appkit-ui/react" {
           /** any - use sql.*() */
           ss: SQLTypeMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Device identifier. */
+          id: string;
+          /** Friendly device label. */
+          name: string;
+          /** City, state of the device. */
+          location: string;
+          /** Latest temperature reading in Fahrenheit. */
+          currentTemp: number;
+          /** normal (<80F) | warning (80-90F) | critical (>90F). */
+          status: string;
+          /** @sqlType STRING */
+          lastUpdate: string;
+        }>;
       };
     inventory_pizza: {
         name: "inventory_pizza";
@@ -104,7 +214,12 @@ declare module "@databricks/appkit-ui/react" {
           /** any - use sql.*() */
           mm: SQLTypeMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          time: string;
+          /** @sqlType DOUBLE */
+          percentage: number;
+        }>;
       };
     inventory_truck: {
         name: "inventory_truck";
@@ -114,7 +229,12 @@ declare module "@databricks/appkit-ui/react" {
           /** any - use sql.*() */
           mm: SQLTypeMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          time: string;
+          /** @sqlType DOUBLE */
+          value: number;
+        }>;
       };
     pipeline_frames: {
         name: "pipeline_frames";
@@ -176,7 +296,18 @@ declare module "@databricks/appkit-ui/react" {
           /** STRING - use sql.string() */
           period: SQLStringMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Two-letter US state abbreviation extracted from the plate. */
+          state: string;
+          /** @sqlType STRING */
+          name: string;
+          /** @sqlType BIGINT */
+          count: number;
+          /** @sqlType DOUBLE */
+          percentage: number;
+          /** @sqlType STRING */
+          color: string;
+        }>;
       };
     plate_recent: {
         name: "plate_recent";
@@ -184,17 +315,44 @@ declare module "@databricks/appkit-ui/react" {
           /** INT - use sql.int() */
           max_rows: SQLNumberMarker;
         };
-        result: unknown;
+        result: Array<{
+          /** Unique capture id. */
+          id: number;
+          /** Two-letter US state abbreviation extracted from the plate. */
+          state: string;
+          /** Plate text with final characters redacted (e.g. ABC***) for privacy. */
+          plateNumber: string;
+          /** @sqlType STRING */
+          location: string;
+          /** @sqlType STRING */
+          time: string;
+          /** @sqlType INT */
+          confidence: number;
+        }>;
       };
     plate_stats: {
         name: "plate_stats";
         parameters: Record<string, never>;
-        result: unknown;
+        result: Array<{
+          /** @sqlType BIGINT */
+          totalDetected: number;
+          /** @sqlType BIGINT */
+          uniqueStates: number;
+          /** @sqlType INT */
+          averagePerHour: number;
+          /** @sqlType STRING */
+          trend: string;
+        }>;
       };
     vehicle_traffic: {
         name: "vehicle_traffic";
         parameters: Record<string, never>;
-        result: unknown;
+        result: Array<{
+          /** @sqlType STRING */
+          hour: string;
+          /** @sqlType BIGINT */
+          vehicles: number;
+        }>;
       };
   }
 }

@@ -33,7 +33,8 @@ companion to the architectural notes in `README.md`.
 - A **Claude serving endpoint** (e.g. `databricks-claude-opus-4-...`) or
   override `llm_endpoint` at deploy time.
 - Optional: a **Roboflow API key** (license-plate + slip/fall detectors) and a
-  **portr account + reserved subdomain** if you want the public tunnel.
+  **self-hosted frps server behind an Azure Container Apps FQDN** if you want
+  the public tunnel.
 
 ---
 
@@ -70,7 +71,7 @@ and a few literal files that DABs can't interpolate.
 
    ```bash
    export ROBOFLOW_API_KEY=<roboflow-key>
-   # TUNNEL_TOKEN: only if you enable the portr tunnel (see section 5)
+   # TUNNEL_TOKEN: only if your frps server requires auth (see section 5)
    ```
 
 ---
@@ -138,59 +139,62 @@ scripts/grant-lakebase-schema.sh
 
 ---
 
-## 5. Public tunnel (portr) - optional
+## 5. Public tunnel (frp / Azure Container Apps) - optional
 
 The Databricks Apps default URL goes through the workspace SSO redirect, which
 is awkward for demos. LensIQ can publish itself to a stable vanity URL through
-[portr](https://github.com/amalshaji/portr). This is **opt-in** and requires
-your own portr server account + a reserved subdomain.
+[frp](https://github.com/fatedier/frp): the app runs `frpc` and dials a
+self-hosted `frps` server fronted by Azure Container Apps. This is **opt-in**
+and requires your own `frps` deployment behind an Azure Container Apps FQDN.
 
 ### How it's wired
 
-- `app.yaml` enables it with three env vars:
+- `app.yaml` enables it with two env vars:
 
   ```yaml
-  - name: TUNNEL_SUBDOMAIN
-    value: lensiq                 # -> https://lensiq.<TUNNEL_SERVER>
-  - name: TUNNEL_SERVER
-    value: apps.dbx.tools         # your portr server_url
+  - name: AZURE_CONTAINER_APPS
+    value: lensiq.<region>.azurecontainerapps.io   # frps FQDN (also the public URL)
   - name: TUNNEL_TOKEN
-    valueFrom: apps_dbx_tools_token   # secret resource (see below)
+    valueFrom: tunnel_token                        # optional secret resource (see below)
   ```
 
-- `scripts/start.sh` (the Apps boot wrapper) sees `TUNNEL_SUBDOMAIN`, downloads
-  the pinned portr client into a writable per-container dir, writes
-  `~/.portr/config.yaml` (server/ssh/secret_key + a `tunnels:` block pinning
-  the subdomain), and backgrounds `portr start <subdomain>` next to node.
+  `AZURE_CONTAINER_APPS` is the Azure Container Apps FQDN that fronts `frps`.
+  The platform terminates TLS on `:443`; the same FQDN is used as the `frpc`
+  `serverAddr` and the vhost `customDomain`, so one URL both carries the
+  client connection and serves public traffic (frps port-reuse).
+
+- `scripts/start.sh` (the Apps boot wrapper) sees `AZURE_CONTAINER_APPS`,
+  downloads the pinned `frpc` (`FRP_VERSION`, default `0.68.1`) into a writable
+  per-container dir, renders `~/.frp/frpc.toml` (`serverAddr`/`serverPort=443`/
+  `transport.protocol="wss"` + an `http` proxy on `DATABRICKS_APP_PORT` with
+  `customDomains` = the FQDN and an optional `auth.token`), and backgrounds
+  `frpc` next to node.
 
 ### To enable it for your workspace
 
-1. **Reserve the subdomain** on your portr server for the account that owns
-   your token, and grab the cli auth token (`portr_...`).
-2. **Store the token as a secret** and make sure the secret **resource name**
-   matches `app.yaml`'s `valueFrom`. Two consistent options:
-   - Keep `valueFrom: apps_dbx_tools_token` (current default) and store the
-     value wherever your app's `apps_dbx_tools_token` resource points, or
-   - Rename both to `tunnel_token` (resource name in `resources/app.yml` **and**
-     the `valueFrom` in `app.yaml`) and store it in `lens-iq/tunnel_token`.
+1. **Stand up an `frps` server** behind an Azure Container Apps FQDN (TLS
+   terminated on `:443`, port-reuse for vhost HTTP). Note its FQDN and, if you
+   configured `auth.token`, that shared token.
+2. **Set `AZURE_CONTAINER_APPS`** in `app.yaml` to that FQDN.
+3. **(Optional) store the auth token as a secret.** It is only needed when your
+   `frps` requires auth. The secret **resource name** must match `app.yaml`'s
+   `valueFrom` (`tunnel_token` by default, backed by `resources/app.yml`):
 
    ```bash
    databricks secrets put-secret <scope> <key> --string-value "$TUNNEL_TOKEN" -p <PROFILE>
    ```
 
-3. Redeploy the app code (section 4d). Confirm the tunnel pinned the right
-   subdomain:
+4. Redeploy the app code (section 4d). Confirm the tunnel came up:
 
    ```bash
-   databricks apps logs lens-iq -p <PROFILE> | grep -E "\[start\] portr|Tunnel started"
-   # want: ✅ Tunnel started: localhost:<port> → https://<subdomain>.<server>
-   curl -s -o /dev/null -w "%{http_code}\n" https://<subdomain>.<server>/
+   databricks apps logs lens-iq -p <PROFILE> | grep -E "\[start\] frpc|start proxy success"
+   curl -s -o /dev/null -w "%{http_code}\n" https://<fqdn>/
    ```
 
 ### To turn it OFF
 
-Remove (or comment out) the `TUNNEL_SUBDOMAIN` env var in `app.yaml` and
-redeploy. `start.sh` then skips the portr install entirely and just runs node;
+Remove (or comment out) the `AZURE_CONTAINER_APPS` env var in `app.yaml` and
+redeploy. `start.sh` then skips the frp install entirely and just runs node;
 the app stays reachable at its standard Databricks Apps URL.
 
 > Genie chat ("Ask LensIQ") is intentionally hidden over the tunnel: it needs
@@ -224,9 +228,9 @@ databricks apps get lens-iq -p "$PROFILE" --output json | jq -r '.url'
 | `failed to update app ... Compute size updates are not supported in this update API` | The terraform provider uses the legacy app-update API, which rejects `compute_size` in the update mask. | Use the manual path (section 4): `databricks apps deploy` pushes code without going through that API. |
 | `failed to create postgres_project ... project slug already exists` | The Lakebase project exists in the workspace but isn't tracked in terraform state (drift). | Left as drift; the app already uses the existing project. Don't recreate it. The manual path skips this. |
 | `failed to get workspace client ... forced token refresh: ... exit status 45` | Transient OS-keyring race when the CLI refreshes the OAuth token under concurrent access. | Just retry the command. `databricks auth token -p <PROFILE>` confirms the token is actually fine. |
-| Tunnel comes up on a **random** subdomain (e.g. `pfqwem.apps.dbx.tools`) | `portr http <port> -s <sub>` ignores the requested subdomain. | Fixed in `start.sh` - it uses a `tunnels:` config block + `portr start <name>`, which pins the subdomain. |
-| Tunnel logs `Shutting down tunnels... server error: Invalid secret key` | `TUNNEL_TOKEN` injected empty - the secret **resource name** attached to the app didn't match `app.yaml`'s `valueFrom`, or the SP lacks READ on the scope. | Make the resource name match (section 5 step 2) and grant the SP READ (section 4b), then redeploy. |
-| Serving plugin logs `Missing required Chat parameter: 'messages'` / `input must be a JSON dictionary ...` | Keepalive pings / probe calls to serving endpoints with empty bodies. | Harmless noise; not fatal to the app. |
+| Tunnel never comes up / `frpc` exits immediately | `frps` server behind `AZURE_CONTAINER_APPS` is down, the FQDN is wrong, or the ingress isn't doing TLS-terminated port-reuse for the vhost. | Verify the FQDN resolves and `frps` is running; `frpc` uses `transport.protocol="wss"` so the ingress must terminate TLS on `:443`. |
+| `frpc` logs `authorization failed` / `token in login doesn't match` | `frps` is configured with an `auth.token` but the app injected an empty/wrong `TUNNEL_TOKEN` (secret **resource name** mismatch or SP lacks READ on the scope). | Store the matching token (section 5 step 3) and grant the SP READ (section 4b), then redeploy - or drop `auth.token` from `frps` to run unauthed. |
+| Serving endpoint keep-alive appears inactive | `SERVING_ENDPOINT_KEEP_ALIVE=false`, no endpoint env vars are configured, or the current time is outside the configured business-hours window. | Check `.env` / `app.yaml` and `server/serving-keepalive.ts`. Keep-alive requests use the raw authenticated workspace client and intentionally swallow the model's empty-payload response. |
 
 ---
 

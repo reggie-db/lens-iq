@@ -244,8 +244,8 @@ export const TOUR_STEPS: TourStep[] = [
         </p>
         <p className="mt-2 text-slate-500">
           Sustained fog opens a Lakebase-backed cleaning ticket. The store
-          fixes the lens before the spill model, the ALPR model, and the
-          PPE model all start under-counting.
+          fixes the lens before the spill, plate, and guest-count workflows
+          start under-counting.
         </p>
       </>
     ),
@@ -268,8 +268,8 @@ export const TOUR_STEPS: TourStep[] = [
             <b>Repeat-customer ID</b> in real time, without a loyalty app.
           </li>
           <li>
-            <b>PPE compliance</b> as a coaching nudge by shift, not a
-            write-up.
+            <b>Low beverage levels</b> surfaced while staff can still offer
+            another round.
           </li>
           <li>
             <b>Pump-island fraud</b> alerts to loss prevention as it happens.

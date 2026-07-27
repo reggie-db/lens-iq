@@ -44,10 +44,26 @@ LAKEBASE_DB_NAME="${LAKEBASE_DB_NAME:-databricks_postgres}"
 # Schemas the app expects. `app_data` (see APP_SCHEMA in
 # server/server.ts) holds every table the LensIQ app writes through
 # AppKit. `appkit` is auto-created by the @databricks/appkit cache
-# plugin's persistent-storage backend on first boot; the same
-# cross-owner problem applies, so both schemas get the PUBLIC bootstrap
+# plugin's persistent-storage backend on first boot. `mastra_instance`
+# + `mastra_fleet_analyst` are auto-created by @dbx-tools/appkit-mastra
+# (workflow snapshots + the fleet-analyst agent's thread store) when the
+# deployed app boots with storage/memory on. The same cross-owner
+# problem applies to all of them, so each gets the PUBLIC bootstrap
 # here. Override with a colon-separated list to add more.
-LAKEBASE_SCHEMAS="${LAKEBASE_SCHEMAS:-${LAKEBASE_SCHEMA:-app_data:appkit}}"
+#
+# Note: GRANT ALL does not confer ownership, and Mastra's PostgresStore
+# needs to *own* its tables to run its boot-time ALTER TABLE migrations.
+# That is what the shared group role below is for.
+LAKEBASE_SCHEMAS="${LAKEBASE_SCHEMAS:-${LAKEBASE_SCHEMA:-app_data:appkit:mastra_instance:mastra_fleet_analyst}}"
+
+# Shared group role that owns every object in those schemas. The deployed
+# app connects as its service principal and local dev connects as the
+# developer, so without a common owner each identity owns whatever it
+# created first and the other one cannot ALTER it. Both identities are
+# made members (WITH SET so they can switch into it), and server.ts pins
+# every Lakebase connection to this role via the pool's `-c role=` option
+# so newly created objects belong to the group from the start.
+PG_APP_ROLE="${PG_APP_ROLE:-lens_iq_app}"
 
 DATABRICKS_PROFILE_FLAG=()
 if [[ -n "${DATABRICKS_PROFILE:-}" ]]; then
@@ -83,6 +99,11 @@ PGUSER="$(databricks current-user me \
 
 export PGSSLMODE=require PGPASSWORD
 
+_psql() {
+  psql -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$LAKEBASE_DB_NAME" \
+    -v ON_ERROR_STOP=1 --quiet "$@"
+}
+
 # `:"schema"` is psql's identifier-quoting variable substitution; it produces
 # correctly quoted "app_data" in every position. Loop over each schema so
 # the SP and any future role can read/write both the LensIQ app's tables
@@ -91,8 +112,7 @@ IFS=':' read -r -a _schemas <<< "$LAKEBASE_SCHEMAS"
 for _schema in "${_schemas[@]}"; do
   [[ -n "$_schema" ]] || continue
   _log "applying to ${LAKEBASE_DB_NAME}.${_schema} (as ${PGUSER}@${PGHOST})"
-  psql -h "$PGHOST" -p 5432 -U "$PGUSER" -d "$LAKEBASE_DB_NAME" \
-    -v ON_ERROR_STOP=1 -v schema="${_schema}" --quiet <<'SQL'
+  _psql -v schema="${_schema}" <<'SQL'
 CREATE SCHEMA IF NOT EXISTS :"schema";
 GRANT USAGE, CREATE ON SCHEMA :"schema" TO PUBLIC;
 GRANT ALL ON ALL TABLES    IN SCHEMA :"schema" TO PUBLIC;
@@ -101,5 +121,88 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA :"schema" GRANT ALL ON TABLES    TO PUBLIC;
 ALTER DEFAULT PRIVILEGES IN SCHEMA :"schema" GRANT ALL ON SEQUENCES TO PUBLIC;
 SQL
 done
+
+# Shared-owner bootstrap. `RESET role` first because this script's own
+# identity is a member of the group role and a prior run may have left the
+# session switched into it - the GRANTs below need the CREATEROLE identity.
+_log "consolidating ownership under role ${PG_APP_ROLE}"
+_psql -v role="$PG_APP_ROLE" -v schemas="$LAKEBASE_SCHEMAS" <<'SQL'
+RESET role;
+
+-- psql does not interpolate `:'var'` inside a dollar-quoted body, so hand the
+-- values to the DO block as session settings instead.
+SELECT set_config('lens_iq.app_role', :'role', false),
+       set_config('lens_iq.schemas', :'schemas', false);
+
+DO $$
+DECLARE
+  app_role      text := current_setting('lens_iq.app_role');
+  schema_list   text[] := string_to_array(current_setting('lens_iq.schemas'), ':');
+  member_role   text;
+  schema_name   text;
+  obj           record;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = app_role) THEN
+    EXECUTE format('CREATE ROLE %I NOLOGIN', app_role);
+  END IF;
+
+  -- Membership self-discovers: anything that already owns an object here is
+  -- an identity that connects to this app, so it needs to be in the group.
+  -- WITH SET is required for the `-c role=` connection option to work.
+  FOR member_role IN
+    SELECT DISTINCT pg_get_userbyid(c.relowner)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = ANY(schema_list)
+    UNION
+    SELECT DISTINCT pg_get_userbyid(nspowner)
+      FROM pg_namespace WHERE nspname = ANY(schema_list)
+    UNION
+    SELECT current_user
+  LOOP
+    IF member_role <> app_role THEN
+      EXECUTE format('GRANT %I TO %I WITH INHERIT TRUE, SET TRUE', app_role, member_role);
+    END IF;
+  END LOOP;
+
+  FOREACH schema_name IN ARRAY schema_list LOOP
+    EXECUTE format('ALTER SCHEMA %I OWNER TO %I', schema_name, app_role);
+  END LOOP;
+
+  -- Reassign what this identity owns. Objects owned by a *different*
+  -- identity can only be reassigned by that identity, but since every
+  -- connection now runs as the group role (server.ts pins `-c role=`),
+  -- anything created from here on already belongs to the group.
+  FOR obj IN
+    SELECT n.nspname, c.relname, c.relkind
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = ANY(schema_list)
+       AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+       AND pg_get_userbyid(c.relowner) = current_user
+       -- Serial/identity sequences belong to their table and cannot be
+       -- reassigned on their own; ALTER TABLE carries them along.
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_depend d
+          WHERE d.objid = c.oid
+            AND d.classid = 'pg_class'::regclass
+            AND d.deptype = 'a'
+       )
+  LOOP
+    EXECUTE format('ALTER %s %I.%I OWNER TO %I',
+      CASE obj.relkind
+        WHEN 'S' THEN 'SEQUENCE'
+        WHEN 'v' THEN 'VIEW'
+        WHEN 'm' THEN 'MATERIALIZED VIEW'
+        ELSE 'TABLE'
+      END, obj.nspname, obj.relname, app_role);
+  END LOOP;
+END
+$$;
+
+SELECT n.nspname AS schema, pg_get_userbyid(c.relowner) AS owner, count(*) AS objects
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE n.nspname = ANY(string_to_array(:'schemas', ':'))
+   AND c.relkind IN ('r', 'p')
+ GROUP BY 1, 2 ORDER BY 1, 2;
+SQL
 
 _log "done."

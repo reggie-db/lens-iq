@@ -11,6 +11,7 @@ client/dist/
 package-lock.json
 yarn.lock
 pnpm-lock.yaml
+bun.lock
 bun.lockb
 uv.lock
 poetry.lock
@@ -19,7 +20,6 @@ Pipfile.lock
 # Environment & secrets
 .env
 .env.*
-!.env.example
 
 # Databricks
 .databricks/
@@ -58,7 +58,7 @@ Thumbs.db
 tmp/
 .cache/
 
-# Portr client state (HOME=$PWD/.home in scripts/start.sh)
+# frp client state (HOME=$PWD/.home in scripts/start.sh)
 .home/
 
 # Rendered analytics queries. config/queries/*.sql.tmpl are the source of

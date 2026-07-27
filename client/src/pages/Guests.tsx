@@ -125,13 +125,7 @@ export function GuestsPage({ isActive }: GuestsPageProps) {
     [],
   );
   const inStoreSources = useMemo(
-    () =>
-      SAMPLE_VIDEOS.filter(
-        (s) =>
-          s.models.includes("people_count") ||
-          s.id === "cstore-interior" ||
-          s.id === "qsr-cafe-cctv",
-      ),
+    () => SAMPLE_VIDEOS.filter((s) => s.models.includes("yolo")),
     [],
   );
 

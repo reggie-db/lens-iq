@@ -21,12 +21,13 @@ import { useSampleVideoStream } from "../lib/useSampleVideoStream";
 import { useDetectionLoop } from "../lib/useDetectionLoop";
 import { usePollingEffect } from "../lib/usePollingEffect";
 import { drawBboxOverlay, type OverlayBox } from "../lib/bbox-overlay";
+import { hexToRgba } from "../lib/utils";
 
-// Sources the user can feed into the detector. The Data + AI Summit expo-floor
-// clip is the default "Live" source so an unattended booth display shows a
-// recognizable crowd instead of prompting for the device camera; the webcam
-// stays available as a second entry under the "Live" group. Everything else
-// maps onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
+// Sources the user can feed into the detector. Webcam is the default Live
+// source; if the device camera is unavailable (denied, missing, insecure
+// context, or other error) we fall back to the Data + AI Summit expo-floor
+// clip so an unattended booth display still shows a recognizable crowd.
+// Everything else maps onto SAMPLE_VIDEOS proxied through /api/sample-videos/:id.
 const WEBCAM_SOURCE_ID = "webcam";
 // SAMPLE_VIDEOS id of the expo-floor clip rendered under "Live" (see samples.ts).
 const LIVE_SOURCE_ID = "expo-floor";
@@ -79,7 +80,7 @@ export function LivePage({ isActive }: LivePageProps) {
   const [now, setNow] = useState<number>(() => Date.now());
   const [saving, setSaving] = useState<boolean>(false);
   const [modelId, setModelId] = useState<string>(DEFAULT_MODEL_ID);
-  const [sourceId, setSourceId] = useState<string>(LIVE_SOURCE_ID);
+  const [sourceId, setSourceId] = useState<string>(WEBCAM_SOURCE_ID);
   // Tracks when the current /api/detect tick started. Used for the on-video
   // spinner overlay; we render `now - pendingSince` so the user gets a live
   // elapsed counter during cold starts.
@@ -107,6 +108,25 @@ export function LivePage({ isActive }: LivePageProps) {
     isActive: sampleActive,
     sample: activeSample,
   });
+
+  // Prefer webcam; if it cannot start, land on the expo-floor clip so Live
+  // still has a working feed without the presenter hunting the Source menu.
+  useEffect(() => {
+    if (sourceId !== WEBCAM_SOURCE_ID) return;
+    if (
+      cameraStatus.kind !== "denied" &&
+      cameraStatus.kind !== "missing" &&
+      cameraStatus.kind !== "insecure" &&
+      cameraStatus.kind !== "error"
+    ) {
+      return;
+    }
+    const fallback = getSampleVideo(LIVE_SOURCE_ID);
+    setSourceId(LIVE_SOURCE_ID);
+    toast.message("Webcam unavailable", {
+      description: `Falling back to ${fallback?.name ?? "Databricks Summit expo floor"}. ${cameraStatus.message}`,
+    });
+  }, [cameraStatus, sourceId]);
 
   // Mirror whichever source's status the user is currently looking at
   // into the page's status pill. Picking the right source means a sample
@@ -190,7 +210,8 @@ export function LivePage({ isActive }: LivePageProps) {
       if (newEntries.length > 0) {
         setHistory((prev) => {
           const cutoff = ts - HISTORY_WINDOW_MS;
-          const trimmed = prev.length > 0 && prev[0].ts < cutoff
+          const oldest = prev[0];
+          const trimmed = oldest && oldest.ts < cutoff
             ? prev.filter((e) => e.ts >= cutoff)
             : prev;
           return [...trimmed, ...newEntries];
@@ -226,7 +247,10 @@ export function LivePage({ isActive }: LivePageProps) {
     if (!isActive) return;
     const id = setInterval(() => {
       const cutoff = Date.now() - HISTORY_WINDOW_MS;
-      setHistory((prev) => (prev.length > 0 && prev[0].ts < cutoff ? prev.filter((e) => e.ts >= cutoff) : prev));
+      setHistory((prev) => {
+        const oldest = prev[0];
+        return oldest && oldest.ts < cutoff ? prev.filter((e) => e.ts >= cutoff) : prev;
+      });
       setNow(Date.now());
     }, 1000);
     return () => clearInterval(id);
@@ -295,7 +319,8 @@ export function LivePage({ isActive }: LivePageProps) {
     });
     for (const e of recent) {
       const idx = Math.min(HISTORY_BUCKETS - 1, Math.max(0, Math.floor((e.ts - cutoff) / bucketMs)));
-      buckets[idx].count += 1;
+      const bucket = buckets[idx];
+      if (bucket) bucket.count += 1;
     }
 
     return { total: recent.length, byLabel, buckets };
@@ -336,8 +361,9 @@ export function LivePage({ isActive }: LivePageProps) {
                   // sample is curated for so the demo "just works".
                   if (v !== WEBCAM_SOURCE_ID) {
                     const sample = getSampleVideo(v);
-                    if (sample && sample.models.length > 0 && !sample.models.includes(modelId)) {
-                      setModelId(sample.models[0]);
+                    const curated = sample?.models[0];
+                    if (sample && curated && !sample.models.includes(modelId)) {
+                      setModelId(curated);
                     }
                   }
                 }}
@@ -346,10 +372,10 @@ export function LivePage({ isActive }: LivePageProps) {
                 <SelectContent>
                   <SelectGroup>
                     <SelectLabel>Live</SelectLabel>
+                    <SelectItem value={WEBCAM_SOURCE_ID}>Webcam</SelectItem>
                     {liveSample && (
                       <SelectItem value={liveSample.id}>{liveSample.name}</SelectItem>
                     )}
-                    <SelectItem value={WEBCAM_SOURCE_ID}>Webcam</SelectItem>
                   </SelectGroup>
                   <SelectGroup>
                     <SelectLabel>Sample clips</SelectLabel>
@@ -604,15 +630,9 @@ function DetectorPendingOverlay({
   );
 }
 
-// Convert a `#rrggbb` color string into an `rgba(...)` string at the given
-// alpha. Used to derive translucent fills (bbox label backgrounds, chart
-// cursor) from a model's solid accent color.
+// Red-600, the YOLO default model's accent, for a malformed model color.
+const FALLBACK_RGB = [220, 38, 38] as const;
+
 function _hexToRgba(hex: string, alpha: number): string {
-  const m = hex.match(/^#?([0-9a-fA-F]{6})$/);
-  if (!m) return `rgba(220, 38, 38, ${alpha})`;
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  return hexToRgba(hex, alpha, FALLBACK_RGB);
 }

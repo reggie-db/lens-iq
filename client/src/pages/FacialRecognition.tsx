@@ -164,8 +164,9 @@ export function FacialRecognitionPage({ isActive }: FacialRecognitionPageProps) 
   }, []);
 
   const loadMoreRecent = useCallback(async () => {
-    if (recentLoadingLatch.current || !recentHasMore || recent.length === 0) return;
+    if (recentLoadingLatch.current || !recentHasMore) return;
     const tail = recent[recent.length - 1];
+    if (!tail) return;
     recentLoadingLatch.current = true;
     setRecentLoading(true);
     try {
@@ -911,8 +912,8 @@ interface MatchThumbnailProps {
   caption: string;
   fallbackIcon: typeof ShieldAlert;
   fallbackColor: string;
-  mirror?: boolean;
-  onClick?: () => void;
+  mirror?: boolean | undefined;
+  onClick?: (() => void) | undefined;
 }
 
 function MatchThumbnail({

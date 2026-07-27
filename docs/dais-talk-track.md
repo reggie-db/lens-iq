@@ -455,20 +455,15 @@ Where this lands hardest: **grocery freezer/cooler aisles, outdoor PTZ
 fleets, gas-station canopy cameras, any chain with thousands of cameras
 under one maintenance team.**
 
-### 4.5 - Slip and fall, PPE, age-gate (Live page specialty models)
+### 4.5 - Slip and fall (Live page specialty model)
 
-These ship as additional endpoints on the **Live** page detector
-dropdown. Same Delta + Lakebase plumbing as the headline use cases. Pull
-these out when the badge in front of you matches.
+This ships as an additional endpoint on the **Live** page detector
+dropdown, with the same Delta + Lakebase plumbing as the headline use cases.
 
 - **Slip & fall (`slip_fall`).** Detects standing vs fallen persons.
   Pair with the spill model so the carrier has both the hazard *and*
   the incident timestamped on the same row. QSR, grocery, hotels.
-- **PPE / hard hat (`hard_hat`).** Detects helmet compliance on
-  back-of-house or industrial lines. Weekly coaching trend, not a
-  punitive write-up. Manufacturing, distribution, fuel back-of-house.
-
-The talk track for these is identical to spill: it's a model on its own
+The talk track is identical to spill: it is a model on its own
 endpoint, every detection lands in Delta and Lakebase, Genie can ask
 questions in English. The customer gets a model, not a stack.
 
@@ -790,7 +785,6 @@ is the operator path, Zerobus is the on-ramp.
 | Camera Clarity     | `fog_detector`     | `lensiq-fog-detector`      | Pillow + numpy lens-condition diagnostic, no GPU              |
 | Facial Recognition | `face_recognition` | `lensiq-face-recognition`  | InsightFace `buffalo_l` (SCRFD + ArcFace 512-d) + pgvector match in Lakebase |
 | Live (specialty)   | `slip_fall`        | `lensiq-slip-fall`         | Standing vs fallen person                                     |
-| Live (specialty)   | `hard_hat`         | (on-demand)                | PPE compliance                                                |
 
 Each endpoint is independently versioned, owned, and billed. Adding a new
 use case is one notebook (`notebooks/deploy_*.ipynb`) plus one row in

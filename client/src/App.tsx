@@ -1,7 +1,7 @@
 import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useState } from "react";
 import {
-  Activity, Bell, BookOpen, Camera, Car, ChevronDown, CloudFog, Cone, Cpu, Database,
+  Activity, Beer, Bell, BookOpen, Camera, Car, ChevronDown, CloudFog, Cone, Cpu, Database,
   Fuel, LayoutDashboard, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
   TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
@@ -27,9 +27,11 @@ import { CameraHealthPage } from "./pages/CameraHealth";
 import { FacialRecognitionPage } from "./pages/FacialRecognition";
 import { PizzaInventoryPage } from "./pages/PizzaInventory";
 import { PumpStatusPage } from "./pages/PumpStatus";
+import { BeveragePage } from "./pages/Beverage";
 import { InfoPage } from "./pages/Info";
 import { DeckPage } from "./pages/Deck";
-import { AIChatButton } from "./components/AIChatButton";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { AIChatLauncher, AIChatPanel } from "./components/AIChatButton";
 import { GlobalLoadingBar } from "./components/GlobalLoadingBar";
 import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
 import { TourProvider, useTour } from "./lib/tour";
@@ -51,6 +53,7 @@ const VIEW_TITLES: Record<string, string> = {
   inventory: "Inventory",
   "pizza-inventory": "Pizza Inventory",
   "pump-status": "Pump Status",
+  beverage: "Beverage Service",
   trends: "Trends",
   live: "Live Stream",
   upload: "Image Upload",
@@ -122,6 +125,7 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
       <NavButton view="clarity"          label="Camera Clarity"     icon={CloudFog}       activeView={activeView} onNavigate={handle} />
       <NavButton view="pizza-inventory"  label="Pizza Inventory"    icon={Pizza}          activeView={activeView} onNavigate={handle} />
       <NavButton view="pump-status"      label="Pump Status"        icon={Fuel}           activeView={activeView} onNavigate={handle} />
+      <NavButton view="beverage"         label="Beverage Service"   icon={Beer}           activeView={activeView} onNavigate={handle} />
       <NavButton view="upload"           label="Image Upload"       icon={Upload}         activeView={activeView} onNavigate={handle} />
       <NavButton view="pipeline"         label="Pipeline"           icon={Workflow}       activeView={activeView} onNavigate={handle} />
       <NavButton view="detections"       label="Detections"         icon={Camera}         activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
@@ -216,11 +220,12 @@ function AppShell() {
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
+  const [chatOpen, setChatOpen] = useState(false);
 
-  // The Genie chat talks to the space on the signed-in user's behalf, so it
-  // only works when the Databricks Apps proxy forwards a user token. Reached
-  // over the public portr tunnel that token is absent, so hide the chat
-  // button entirely rather than render one that errors on every question.
+  // The Genie chat talks to the space on the signed-in user's behalf, so in
+  // production it only renders when the Databricks Apps proxy forwards a
+  // user token (hidden on the public frp tunnel). Local/dev always reports
+  // available so Genie stays in the demo while testing.
   const oboAvailable = useOboAvailable();
 
   // Presenter mode gates the booth-only Talk Track (/info) and Booth Deck
@@ -320,34 +325,64 @@ function AppShell() {
           </div>
         </header>
 
-        <main className="flex-1 min-h-0 px-4 md:px-8 py-4 overflow-y-auto overscroll-contain">
-          <Routes>
-            <Route path="/" element={<Navigate to="/overview" replace />} />
-            <Route path="/overview" element={<OverviewPage />} />
-            <Route path="/devices" element={<DevicesPage />} />
-            <Route path="/alerts" element={<AlertsPage />} />
-            <Route path="/detections" element={<DetectionsPage />} />
-            <Route path="/plates" element={<PlatesPage isActive={activeView === "plates"} />} />
-            <Route path="/search" element={<SearchPage />} />
-            <Route path="/inventory" element={<InventoryPage />} />
-            <Route path="/trends" element={<TrendsPage />} />
-            <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
-            <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
-            <Route path="/spills" element={<SpillsPage isActive={activeView === "spills"} />} />
-            <Route path="/faces" element={<FacialRecognitionPage isActive={activeView === "faces"} />} />
-            <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
-            <Route path="/pizza-inventory" element={<PizzaInventoryPage isActive={activeView === "pizza-inventory"} />} />
-            <Route path="/pump-status" element={<PumpStatusPage isActive={activeView === "pump-status"} />} />
-            <Route path="/upload" element={<UploadPage />} />
-            <Route path="/pipeline" element={<PipelinePage />} />
-            {/* Presenter-only routes: direct hits without ?presenterMode=true
-                bounce back to the dashboard. */}
-            <Route path="/info" element={presenterMode ? <InfoPage /> : <Navigate to="/overview" replace />} />
-            <Route path="/deck" element={presenterMode ? <DeckPage /> : <Navigate to="/overview" replace />} />
-          </Routes>
-        </main>
+        {/* Content + chat share one resizable split. The chat panel is
+            conditionally mounted, so PanelGroup is keyed on `chatOpen` to
+            force a fresh layout instead of restoring stale panel sizes. */}
+        <PanelGroup
+          key={chatOpen ? "with-chat" : "content-only"}
+          direction="horizontal"
+          className="flex-1 min-h-0"
+        >
+          <Panel defaultSize={chatOpen ? 65 : 100} minSize={30} className="flex min-w-0 flex-col">
+            <main className="flex-1 min-h-0 px-4 md:px-8 py-4 overflow-y-auto overscroll-contain">
+              <Routes>
+                <Route path="/" element={<Navigate to="/overview" replace />} />
+                <Route path="/overview" element={<OverviewPage />} />
+                <Route path="/devices" element={<DevicesPage />} />
+                <Route path="/alerts" element={<AlertsPage />} />
+                <Route path="/detections" element={<DetectionsPage />} />
+                <Route path="/plates" element={<PlatesPage isActive={activeView === "plates"} />} />
+                <Route path="/search" element={<SearchPage />} />
+                <Route path="/inventory" element={<InventoryPage />} />
+                <Route path="/trends" element={<TrendsPage />} />
+                <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
+                <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
+                <Route path="/spills" element={<SpillsPage isActive={activeView === "spills"} />} />
+                <Route path="/faces" element={<FacialRecognitionPage isActive={activeView === "faces"} />} />
+                <Route path="/clarity" element={<CameraHealthPage isActive={activeView === "clarity"} />} />
+                <Route path="/pizza-inventory" element={<PizzaInventoryPage isActive={activeView === "pizza-inventory"} />} />
+                <Route path="/pump-status" element={<PumpStatusPage isActive={activeView === "pump-status"} />} />
+                <Route path="/beverage" element={<BeveragePage isActive={activeView === "beverage"} />} />
+                <Route path="/upload" element={<UploadPage />} />
+                <Route path="/pipeline" element={<PipelinePage />} />
+                {/* Presenter-only routes: direct hits without ?presenterMode=true
+                    bounce back to the dashboard. */}
+                <Route path="/info" element={presenterMode ? <InfoPage /> : <Navigate to="/overview" replace />} />
+                <Route path="/deck" element={presenterMode ? <DeckPage /> : <Navigate to="/overview" replace />} />
+              </Routes>
+            </main>
+          </Panel>
 
-        {oboAvailable && <AIChatButton />}
+          {oboAvailable && chatOpen && (
+            <>
+              {/* The 6px handle is the visible divider; the inset span widens
+                  the grab target either side of it without moving the seam. */}
+              <PanelResizeHandle className="group relative w-1.5 shrink-0 cursor-col-resize bg-slate-200 outline-none transition-colors hover:bg-slate-300 focus-visible:bg-slate-400 data-[resize-handle-active]:bg-slate-400">
+                <span className="absolute inset-y-0 -left-1 -right-1" aria-hidden />
+              </PanelResizeHandle>
+              <Panel
+                defaultSize={35}
+                minSize={20}
+                maxSize={60}
+                className="min-w-0 border-l border-slate-200"
+              >
+                <AIChatPanel onClose={() => setChatOpen(false)} />
+              </Panel>
+            </>
+          )}
+        </PanelGroup>
+
+        {oboAvailable && !chatOpen && <AIChatLauncher onClick={() => setChatOpen(true)} />}
       </div>
     </div>
   );

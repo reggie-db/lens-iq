@@ -25,9 +25,9 @@ export interface ImageModalProps {
   alt: string;
   /** When true, the image is horizontally mirrored. Use for selfie
    * thumbnails so the modal matches the mirrored on-screen preview. */
-  mirror?: boolean;
+  mirror?: boolean | undefined;
   /** Optional caption rendered under the image (name, timestamp, etc.). */
-  caption?: ReactNode;
+  caption?: ReactNode | undefined;
 }
 
 export function ImageModal({

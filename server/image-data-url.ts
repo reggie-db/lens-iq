@@ -41,9 +41,11 @@ export interface ImageDataUrl {
 export function parseImageDataUrl(image: string): ImageDataUrl | null {
   const trimmed = image.trim();
   const match = _DATA_URL_RE.exec(trimmed);
-  if (match) {
-    const mime = match[1];
-    const base64 = match[2];
+  // Both groups are non-optional in the pattern, so a match always carries
+  // them; the guard is what proves that to the compiler.
+  const mime = match?.[1];
+  const base64 = match?.[2];
+  if (mime && base64 !== undefined) {
     return {
       bytes: Buffer.from(base64, "base64"),
       mime,

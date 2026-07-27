@@ -8,6 +8,8 @@
 // `scaleDetectionBbox(... scaleX, scaleY)` if you fed the detector a
 // downscaled frame.
 
+import { hexToRgba } from "./utils";
+
 export interface OverlayBox {
   bbox: [number, number, number, number];
   color: string;
@@ -19,14 +21,11 @@ export interface OverlayBox {
   labelAlpha?: number;
 }
 
+// Sky-500, the overlay's own accent, for boxes that arrive with a malformed color.
+const FALLBACK_RGB = [14, 165, 233] as const;
+
 function _hexToRgba(hex: string, alpha: number): string {
-  const m = hex.match(/^#?([0-9a-fA-F]{6})$/);
-  if (!m) return `rgba(14, 165, 233, ${alpha})`;
-  const n = parseInt(m[1], 16);
-  const r = (n >> 16) & 0xff;
-  const g = (n >> 8) & 0xff;
-  const b = n & 0xff;
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  return hexToRgba(hex, alpha, FALLBACK_RGB);
 }
 
 export interface DrawBboxOverlayOptions {

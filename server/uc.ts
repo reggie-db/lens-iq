@@ -22,7 +22,7 @@ const LOG_PREFIX = "[uc]";
 
 // Defaults mirror databricks.yml::variables.{catalog,schema}. app.yaml / .env
 // override them at runtime; these only apply when neither env var is set.
-const DEFAULT_CATALOG = "retail_consumer_goods";
+const DEFAULT_CATALOG = "reggie_pierce_aws_catalog";
 const DEFAULT_SCHEMA = "lens_iq";
 
 const QUERIES_DIR = resolvePath(process.cwd(), "config/queries");
