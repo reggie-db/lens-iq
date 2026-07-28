@@ -13,8 +13,10 @@ import { useEffect, useRef, useState } from "react";
 // - Module-level state + a tiny pub/sub keeps the patch independent of the
 //   React tree; any component that imports `loadingBar` can drive the bar
 //   manually for non-fetch async work.
-// - Progress easing: kick to 15% on first request, then asymptote to 90%
-//   while requests are in flight, snap to 100% + fade out when all done.
+// - Progress easing: after SHOW_DELAY_MS with work still in flight, kick to
+//   15%, then asymptote to 90% while requests are in flight, snap to 100% +
+//   fade out when all done. Requests that finish inside the grace window
+//   never paint the bar.
 
 let _inFlight = 0;
 const _listeners = new Set<(n: number) => void>();
@@ -31,6 +33,8 @@ let _patched = false;
 //   - /api/talk-track/transform: background LLM rewrite kicked off from
 //                          /info; the page surfaces its own inline
 //                          progress + sonner toast, no global bar needed.
+//   - /api/mastra       : Ask LensIQ chat (stream + threads + model picker);
+//                          MastraChat already has its own in-panel loading UX.
 // Match against the URL path so absolute, relative, and Request-object
 // inputs all behave the same.
 const EXCLUDED_PATHS: readonly string[] = [
@@ -40,7 +44,13 @@ const EXCLUDED_PATHS: readonly string[] = [
   "/api/face-matches",
   "/api/serving-status",
   "/api/talk-track/transform",
+  "/api/mastra",
 ];
+
+// Grace period before the bar paints. Fast requests that finish inside this
+// window never flash the bar. 400ms is ~2x a typical NProgress-style delay
+// so short Genie/SQL round-trips stay quiet.
+const SHOW_DELAY_MS = 400;
 
 function _urlPath(input: RequestInfo | URL): string {
   try {
@@ -100,6 +110,7 @@ export function GlobalLoadingBar(): React.ReactElement {
 
   useEffect(() => {
     let creepTimer: ReturnType<typeof setInterval> | null = null;
+    let showTimer: ReturnType<typeof setTimeout> | null = null;
     let fadeTimer: ReturnType<typeof setTimeout> | null = null;
 
     const start = (): void => {
@@ -128,8 +139,21 @@ export function GlobalLoadingBar(): React.ReactElement {
 
     const onChange = (n: number): void => {
       pendingRef.current = n;
-      if (n > 0 && !creepTimer) start();
-      if (n === 0 && creepTimer) finish();
+      if (n > 0) {
+        // Still waiting on SHOW_DELAY_MS, or already painting - nothing to do.
+        if (creepTimer || showTimer) return;
+        showTimer = setTimeout(() => {
+          showTimer = null;
+          if (pendingRef.current > 0) start();
+        }, SHOW_DELAY_MS);
+        return;
+      }
+      // All requests finished before the grace window: cancel without painting.
+      if (showTimer) {
+        clearTimeout(showTimer);
+        showTimer = null;
+      }
+      if (creepTimer) finish();
     };
 
     _listeners.add(onChange);
@@ -138,6 +162,7 @@ export function GlobalLoadingBar(): React.ReactElement {
     return (): void => {
       _listeners.delete(onChange);
       if (creepTimer) clearInterval(creepTimer);
+      if (showTimer) clearTimeout(showTimer);
       if (fadeTimer) clearTimeout(fadeTimer);
     };
   }, []);

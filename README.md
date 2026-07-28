@@ -149,9 +149,12 @@ agentic application layer on top of Databricks AppKit:
 - [`@dbx-tools/email`](https://github.com/reggie-db/dbx-tools/tree/main/workspaces/node/email)
   provides the approval-gated `send_email` agent tool.
 
-The Ask LensIQ flow uses on-behalf-of-user authorization for Genie, SQL, and
-serving endpoint discovery. Other application routes use the app service
-principal and the resources bound in `resources/app.yml`.
+The Ask LensIQ flow runs Genie, SQL statement execution, and the serving
+catalogue as the **app service principal** (`MASTRA_GENIE_IDENTITY=service-principal`
+/ `genieIdentity: "service-principal"`). That lets any Databricks account user
+who can open the app chat, even without workspace membership. Memory threads
+still key off the signed-in user. Other application routes also use the app
+service principal and the resources bound in `resources/app.yml`.
 
 ## Developer guide
 

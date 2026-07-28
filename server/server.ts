@@ -107,14 +107,13 @@ const PRESENTER_CONTENT: Record<string, PresenterContentDef> = {
 // LensIQ AppKit server.
 //
 // Most custom routes (detect, faces, volumes, Lakebase app tables) run as the
-// app service principal. The "Ask LensIQ" Mastra chat is the exception: the
-// `@dbx-tools/appkit-mastra` plugin wraps each turn in `asUser(req)` so Genie,
-// statementExecution, and the model-picker serving catalogue resolve with the
-// signed-in user's OBO token. That needs `user_api_scopes` on the app
-// resource (sql, dashboards.genie, serving.serving-endpoints in
-// resources/app.yml) so the Apps proxy forwards `X-Forwarded-Access-Token`.
-// /api/auth/obo below only checks that header's presence so the UI can hide
-// the chat when the request did not come through the Apps SSO proxy.
+// app service principal. The "Ask LensIQ" Mastra chat also runs its Databricks
+// calls (Genie, statementExecution, serving catalogue) as the app SP when
+// `genieIdentity: "service-principal"` / `MASTRA_GENIE_IDENTITY` is set, so
+// account users who can open the app but are not workspace members can chat.
+// Memory threads still key off the signed-in user. `/api/auth/obo` remains
+// available for UIs that want to distinguish OBO vs SP, but the chat launcher
+// prefers `chatAlwaysAvailable` from the mastra client config in SP mode.
 //
 // Plugins:
 //   - server(): Express + Vite middleware (dev) / static (prod).
@@ -717,7 +716,8 @@ const AppKit = await createApp({
     // `default` alias. UI is <MastraChat> in AIChatButton.tsx (same drop-in
     // as the dbx-tools Stream demo), not AppKit's bare <GenieChat>. Only
     // register when the space id is set so the app still boots without a
-    // space; the chat button is gated on OBO availability.
+    // space; the chat button prefers mastra `chatAlwaysAvailable` (SP mode)
+    // and falls back to the OBO probe when identity is `"user"`.
     ...(process.env.DATABRICKS_GENIE_SPACE_ID ? [genie()] : []),
     files({
       // Volumes are reached as the app service principal. The DAB declares
@@ -772,6 +772,12 @@ const AppKit = await createApp({
           storage: true,
           memory: true,
           agents: lensIqAgent,
+          // Run Genie / serving-catalogue / statement-execution as the app
+          // service principal so account users who can open the app but are
+          // not workspace members can still chat. Env MASTRA_GENIE_IDENTITY
+          // (set in app.yaml) is the same switch; this makes the intent
+          // explicit in code. Memory threads still key off the signed-in user.
+          genieIdentity: "service-principal",
         }),
       ]
       : []),

@@ -25,6 +25,13 @@ env:
   # databricks.yml::variables.genie_space_id.
   - name: DATABRICKS_GENIE_SPACE_ID
     value: 01f186bee4ce16f1ac00f8b0df1c88d6
+  # Ask LensIQ Databricks calls (Genie, serving catalogue, statement
+  # execution) run as the app service principal so any account user who
+  # can open the app can chat without being a workspace member. Memory
+  # threads still key off the signed-in user. Override to "user" to force
+  # classic OBO (requires workspace membership).
+  - name: MASTRA_GENIE_IDENTITY
+    value: service-principal
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: warehouse
   # The serving + files plugins ship a static manifest that always declares

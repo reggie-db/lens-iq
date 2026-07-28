@@ -37,6 +37,7 @@ import { ApertureIcon, LensIQLogo } from "./components/LensIQLogo";
 import { TourProvider, useTour } from "./lib/tour";
 import { KioskProvider, useKiosk } from "./lib/kiosk";
 import { useOboAvailable } from "./lib/auth";
+import { useMastraConfig } from "@dbx-tools/ui-mastra/react";
 import "./lib/queries";
 
 type Role = "Admin" | "Store Manager";
@@ -222,11 +223,12 @@ function AppShell() {
   const [userRole, setUserRole] = useState<Role>("Admin");
   const [chatOpen, setChatOpen] = useState(false);
 
-  // The Genie chat talks to the space on the signed-in user's behalf, so in
-  // production it only renders when the Databricks Apps proxy forwards a
-  // user token. Local/dev always reports available so Genie stays in the
-  // demo while testing.
+  // Ask LensIQ: show when Mastra is in service-principal mode (chatAlwaysAvailable)
+  // or when an OBO user token is present. SP mode is the deploy default so
+  // account users who can open the app can chat without workspace membership.
+  const mastraConfig = useMastraConfig();
   const oboAvailable = useOboAvailable();
+  const chatAvailable = mastraConfig.chatAlwaysAvailable || Boolean(oboAvailable);
 
   // Presenter mode gates the booth-only Talk Track (/info) and Booth Deck
   // (/deck) surfaces. Driven purely by the ?presenterMode=true query param so
@@ -363,7 +365,7 @@ function AppShell() {
             </main>
           </Panel>
 
-          {oboAvailable && chatOpen && (
+          {chatAvailable && chatOpen && (
             <>
               {/* The 6px handle is the visible divider; the inset span widens
                   the grab target either side of it without moving the seam. */}
@@ -382,7 +384,7 @@ function AppShell() {
           )}
         </PanelGroup>
 
-        {oboAvailable && !chatOpen && <AIChatLauncher onClick={() => setChatOpen(true)} />}
+        {chatAvailable && !chatOpen && <AIChatLauncher onClick={() => setChatOpen(true)} />}
       </div>
     </div>
   );
