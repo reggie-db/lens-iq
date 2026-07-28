@@ -27,6 +27,30 @@ body {
   height: 100%;
 }
 
+/* Under resolved dark mode, remap the most common light-only Tailwind
+   utilities used across demo pages onto AppKit semantic tokens. Pages still
+   hardcode bg-white / text-slate-900; without this, AppKit Cards go dark
+   (via --card) while nested surfaces stay chalk-white. ThemeProvider always
+   sets .dark or .light on <html>, so the media-query path is not needed. */
+html.dark :where(.bg-white) {
+  background-color: var(--card);
+}
+html.dark :where(.bg-slate-50, .bg-slate-100) {
+  background-color: var(--muted);
+}
+html.dark :where(.text-slate-900, .text-slate-800, .text-slate-700) {
+  color: var(--foreground);
+}
+html.dark :where(.text-slate-600, .text-slate-500, .text-slate-400) {
+  color: var(--muted-foreground);
+}
+html.dark :where(.border-slate-200, .border-slate-100) {
+  border-color: var(--border);
+}
+html.dark :where(.hover\:bg-slate-50):hover {
+  background-color: var(--accent);
+}
+
 /* LensIQ brand tokens. Mirrors the palette in client/public/brand-kit.html
    so any Tailwind utility (bg-lava-600, text-navy-800, ...) resolves to the
    same hex the brand kit ships. Type families are also registered as

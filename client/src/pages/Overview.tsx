@@ -206,16 +206,16 @@ export function OverviewPage() {
 
 function DemoHeader() {
   return (
-    <Card className="bg-gradient-to-r from-slate-50 to-white border-slate-200">
+    <Card className="bg-muted/40 border-border">
       <CardContent className="py-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div className="text-xs uppercase tracking-wider text-slate-500 mb-1">
+          <div className="text-xs uppercase tracking-wider text-muted-foreground mb-1">
             Fleet operations dashboard
           </div>
-          <div className="text-lg font-medium text-slate-900">
+          <div className="text-lg font-medium text-foreground">
             Eight stores. One lake. Every camera tied to a dollar line.
           </div>
-          <div className="text-sm text-slate-600 mt-1">
+          <div className="text-sm text-muted-foreground mt-1">
             This is the boardroom view. Each section below clicks through to
             the live model demo behind that number.
           </div>
@@ -260,11 +260,11 @@ function HeadlineRow() {
                   <span className="text-xs">{kpi.trend.value}</span>
                 </Badge>
               </div>
-              <div className="text-3xl font-semibold tracking-tight text-slate-900">
+              <div className="text-3xl font-semibold tracking-tight text-foreground">
                 {kpi.value}
               </div>
-              <div className="text-sm text-slate-700">{kpi.label}</div>
-              <div className="text-xs text-slate-500">{kpi.caption}</div>
+              <div className="text-sm text-foreground/80">{kpi.label}</div>
+              <div className="text-xs text-muted-foreground">{kpi.caption}</div>
             </CardContent>
           </Card>
         );
@@ -293,12 +293,12 @@ function FleetMap() {
             return (
               <div
                 key={s.id}
-                className="rounded-lg border border-slate-200 bg-white p-3 space-y-2"
+                className="rounded-lg border border-border bg-background p-3 space-y-2"
               >
                 <div className="flex items-start justify-between">
                   <div>
-                    <div className="text-sm font-medium text-slate-900">{s.id}</div>
-                    <div className="text-xs text-slate-500">{s.city} · {s.format}</div>
+                    <div className="text-sm font-medium text-foreground">{s.id}</div>
+                    <div className="text-xs text-muted-foreground">{s.city} · {s.format}</div>
                   </div>
                   <span className={`text-xs px-2 py-0.5 rounded border ${badge.tone}`}>
                     {badge.label}

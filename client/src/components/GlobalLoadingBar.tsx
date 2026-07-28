@@ -48,9 +48,10 @@ const EXCLUDED_PATHS: readonly string[] = [
 ];
 
 // Grace period before the bar paints. Fast requests that finish inside this
-// window never flash the bar. 400ms is ~2x a typical NProgress-style delay
-// so short Genie/SQL round-trips stay quiet.
-const SHOW_DELAY_MS = 400;
+// window never flash the bar. 1.5s means only a real hang shows the red line
+// (page navigations, cold SQL, etc.); chat/detect traffic is already
+// excluded via EXCLUDED_PATHS.
+const SHOW_DELAY_MS = 1500;
 
 function _urlPath(input: RequestInfo | URL): string {
   try {

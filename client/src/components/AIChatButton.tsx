@@ -39,8 +39,8 @@ interface AIChatPanelProps {
 
 export function AIChatPanel({ onClose }: AIChatPanelProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-white">
-      <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-4 py-3 font-semibold">
+    <div className="flex h-full min-h-0 flex-col bg-card">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 font-semibold text-foreground">
         <ApertureIcon size={20} title="LensIQ" />
         <span>
           Ask <span style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}>LensIQ</span>
@@ -59,9 +59,14 @@ export function AIChatPanel({ onClose }: AIChatPanelProps) {
       <div className="min-h-0 flex-1 px-3 pb-3 pt-2">
         {/* Same drop-in as dbx-tools demo Stream.tsx: MastraChat streams
             over @mastra/client-js (tool pills, charts, model picker).
-            enableThreads defaults TRUE and would render a conversation
-            sidebar; this is a single-panel booth chat, so keep it off. */}
-        <MastraChat showModelPicker enableExport enableThreads={false} />
+            threadPlacement="top" keeps conversation tabs in an editor-style
+            strip (fits the narrow docked chat column better than a side
+            panel). */}
+        <MastraChat
+          showModelPicker
+          enableExport
+          threadPlacement="top"
+        />
       </div>
     </div>
   );

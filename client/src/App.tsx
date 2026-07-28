@@ -38,6 +38,7 @@ import { TourProvider, useTour } from "./lib/tour";
 import { KioskProvider, useKiosk } from "./lib/kiosk";
 import { useOboAvailable } from "./lib/auth";
 import { useMastraConfig } from "@dbx-tools/ui-mastra/react";
+import { ThemeToggle, useTheme } from "./lib/theme";
 import "./lib/queries";
 
 type Role = "Admin" | "Store Manager";
@@ -113,11 +114,11 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
 
   return (
     <nav className="flex flex-col gap-2">
-      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Start here</div>
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">Start here</div>
       <NavButton view="overview"   label="Fleet Dashboard" icon={LayoutDashboard} activeView={activeView} onNavigate={handle} />
 
-      <div className="my-2 border-t border-slate-200" />
-      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Computer Vision</div>
+      <div className="my-2 border-t border-border" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">Computer Vision</div>
       <NavButton view="live"             label="Live Detection"     icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
       <NavButton view="guests"           label="Guest Counts"       icon={Users}          activeView={activeView} onNavigate={handle} />
       <NavButton view="plates"           label="License Plates"     icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
@@ -131,13 +132,13 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
       <NavButton view="pipeline"         label="Pipeline"           icon={Workflow}       activeView={activeView} onNavigate={handle} />
       <NavButton view="detections"       label="Detections"         icon={Camera}         activeView={activeView} onNavigate={handle} hidden={restricted("detections")} />
 
-      <div className="my-2 border-t border-slate-200" />
-      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">CV-Driven Insights</div>
+      <div className="my-2 border-t border-border" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">CV-Driven Insights</div>
       <NavButton view="inventory"  label="Inventory"     icon={Package}         activeView={activeView} onNavigate={handle} />
       <NavButton view="trends"     label="Trends"        icon={TrendingUp}      activeView={activeView} onNavigate={handle} />
 
-      <div className="my-2 border-t border-slate-200" />
-      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Operations</div>
+      <div className="my-2 border-t border-border" />
+      <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">Operations</div>
       <NavButton view="alerts"     label="Alerts"        icon={Bell}            activeView={activeView} onNavigate={handle} />
       <NavButton view="devices"    label="All Devices"   icon={Cpu}             activeView={activeView} onNavigate={handle} />
       <NavButton view="search"     label="Data Search"   icon={Database}        activeView={activeView} onNavigate={handle} hidden={restricted("search")} />
@@ -146,8 +147,8 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
           carries ?presenterMode=true (see usePresenterMode in AppShell). */}
       {presenterMode && (
         <>
-          <div className="my-2 border-t border-slate-200" />
-          <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-slate-500">Reference</div>
+          <div className="my-2 border-t border-border" />
+          <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">Reference</div>
           <NavButton view="info"       label="Talk Track"    icon={BookOpen}        activeView={activeView} onNavigate={handle} />
           <NavButton view="deck"       label="Booth Deck"    icon={Presentation}    activeView={activeView} onNavigate={handle} />
         </>
@@ -218,6 +219,7 @@ export default function App() {
 function AppShell() {
   const location = useLocation();
   const activeView = location.pathname.slice(1) || "overview";
+  const { resolved: theme } = useTheme();
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [userRole, setUserRole] = useState<Role>("Admin");
@@ -247,11 +249,11 @@ function AppShell() {
   //   - On mobile the sidebar is a Sheet drawer driven by the hamburger.
 
   return (
-    <div className="h-screen bg-slate-50 flex overflow-hidden overscroll-none">
+    <div className="h-screen bg-background flex overflow-hidden overscroll-none">
       <GlobalLoadingBar />
-      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-white border-r border-slate-200">
-        <div className="p-6 border-b border-slate-200 shrink-0">
-          <LensIQLogo iconSize={36} wordmarkSize={22} showSub />
+      <aside className="hidden lg:flex lg:flex-col lg:w-64 lg:shrink-0 bg-card border-r border-border">
+        <div className="p-6 border-b border-border shrink-0">
+          <LensIQLogo iconSize={36} wordmarkSize={22} showSub onDark={theme === "dark"} />
         </div>
         <div className="flex-1 p-4 overflow-y-auto overscroll-contain">
           <NavItems activeView={activeView} userRole={userRole} presenterMode={presenterMode} />
@@ -259,7 +261,7 @@ function AppShell() {
       </aside>
 
       <div className="flex-1 flex flex-col min-w-0 h-screen">
-        <header className="bg-white border-slate-200 border-b shrink-0">
+        <header className="bg-card border-border border-b shrink-0">
           <div className="px-4 md:px-8 py-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -288,18 +290,18 @@ function AppShell() {
                   <ApertureIcon size={26} />
                   <div>
                     <h1
-                      className="text-slate-900 font-medium"
+                      className="text-foreground font-medium"
                       style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.025em" }}
                     >
                       LensIQ
                     </h1>
-                    <p className="text-sm text-slate-600 hidden sm:block">CV monitoring for quick-serve restaurants</p>
+                    <p className="text-sm text-muted-foreground hidden sm:block">CV monitoring for quick-serve restaurants</p>
                   </div>
                 </div>
 
                 <div className="hidden lg:block">
                   <h1
-                    className="text-slate-900 font-medium"
+                    className="text-foreground font-medium"
                     style={{ fontFamily: '"DM Sans", system-ui, sans-serif', letterSpacing: "-0.02em" }}
                   >
                     {VIEW_TITLES[activeView] ?? "LensIQ"}
@@ -309,6 +311,8 @@ function AppShell() {
 
               <div className="flex items-center gap-4">
                 <DemoLauncher />
+
+                <ThemeToggle />
 
                 <Select value={userRole} onValueChange={(v) => setUserRole(v as Role)}>
                   <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
