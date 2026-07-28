@@ -340,6 +340,27 @@ export const SAMPLE_VIDEOS: SampleVideo[] = [
     local: "bar-table-montage.mp4",
     models: ["beer_full", "beer_half", "beer_low", "yolo"],
   },
+
+  // ---------------------------------------------------------------------------
+  // C-store forecourt camera covering a drive-through lane. Fixed low-elevation
+  // vantage at dusk: the order point and menu board sit at frame left, the
+  // queue snakes diagonally across the forecourt, and the storefront fills the
+  // right. The queue visibly builds over the clip, so the YOLO vehicle count
+  // climbs 6 -> 14 - the range is what makes the Guest Location spend and balk
+  // curves move on live input rather than sitting on one point.
+  //
+  // Ships with the source's own burnt-in "CAM 02" HUD and clock, so it does
+  // NOT go through scripts/synth_cctv_look.sh - a second overlay would fight
+  // the first. The only edit is a delogo pass over the generator's sparkle
+  // watermark in the lower right.
+  // ---------------------------------------------------------------------------
+  {
+    id: "drive-thru-lane",
+    name: "Drive-through lane (CCTV)",
+    description: "Fixed forecourt camera at a convenience store at dusk, looking across the drive-through order point with vehicles queued nose-to-tail and the storefront behind. The queue builds through the clip so the YOLO vehicle count climbs from 6 to 14 - the source signal behind the Guest Location spend, balk, and menu panels.",
+    local: "drive-thru-lane.mp4",
+    models: ["yolo", "license_plate"],
+  },
 ];
 
 const _BY_ID = new Map<string, SampleVideo>(SAMPLE_VIDEOS.map((s) => [s.id, s]));

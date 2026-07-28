@@ -2,7 +2,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from "react-router-
 import { useEffect, useState } from "react";
 import {
   Activity, Beer, Bell, BookOpen, Camera, Car, ChevronDown, CloudFog, Cone, Cpu, Database,
-  Fuel, LayoutDashboard, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
+  Fuel, LayoutDashboard, MapPin, Menu, MonitorPlay, Package, Pizza, PlayCircle, Presentation, ScanFace,
   TrendingUp, Upload, Users, Video, Workflow,
 } from "lucide-react";
 import {
@@ -28,6 +28,7 @@ import { FacialRecognitionPage } from "./pages/FacialRecognition";
 import { PizzaInventoryPage } from "./pages/PizzaInventory";
 import { PumpStatusPage } from "./pages/PumpStatus";
 import { BeveragePage } from "./pages/Beverage";
+import { GuestLocationPage } from "./pages/GuestLocation";
 import { InfoPage } from "./pages/Info";
 import { DeckPage } from "./pages/Deck";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
@@ -53,6 +54,7 @@ const VIEW_TITLES: Record<string, string> = {
   plates: "License Plates",
   search: "Data Search",
   inventory: "Inventory",
+  "guest-location": "Guest Location",
   "pizza-inventory": "Pizza Inventory",
   "pump-status": "Pump Status",
   beverage: "Beverage Service",
@@ -121,6 +123,7 @@ function NavItems({ activeView, userRole, presenterMode, onItemClick }: NavItems
       <div className="px-2 pt-1 pb-1 text-xs uppercase tracking-wider text-muted-foreground">Computer Vision</div>
       <NavButton view="live"             label="Live Detection"     icon={Video}          activeView={activeView} onNavigate={handle} hidden={restricted("live")} />
       <NavButton view="guests"           label="Guest Counts"       icon={Users}          activeView={activeView} onNavigate={handle} />
+      <NavButton view="guest-location"   label="Guest Location"     icon={MapPin}         activeView={activeView} onNavigate={handle} />
       <NavButton view="plates"           label="License Plates"     icon={Car}            activeView={activeView} onNavigate={handle} hidden={restricted("plates")} />
       <NavButton view="spills"           label="Spill Detection"    icon={Cone}           activeView={activeView} onNavigate={handle} />
       <NavButton view="faces"            label="Facial Recognition" icon={ScanFace}       activeView={activeView} onNavigate={handle} />
@@ -350,6 +353,10 @@ function AppShell() {
                 <Route path="/plates" element={<PlatesPage isActive={activeView === "plates"} />} />
                 <Route path="/search" element={<SearchPage />} />
                 <Route path="/inventory" element={<InventoryPage />} />
+                <Route
+                  path="/guest-location"
+                  element={<GuestLocationPage isActive={activeView === "guest-location"} />}
+                />
                 <Route path="/trends" element={<TrendsPage />} />
                 <Route path="/live" element={<LivePage isActive={activeView === "live"} />} />
                 <Route path="/guests" element={<GuestsPage isActive={activeView === "guests"} />} />
